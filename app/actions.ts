@@ -22,8 +22,9 @@ export async function createAuction(formData: FormData) {
   const rules = JSON.parse(formData.get("rules") as string)
   const csvFile = formData.get("csvFile") as File | null
 
-  // 1. Generate random 6-letter room code
-  const roomCode = Math.random().toString(36).substring(2, 8).toUpperCase()
+  // 1. Generate room code in format IPL-XXX
+  const randomDigits = Math.floor(100 + Math.random() * 900)
+  const roomCode = `IPL-${randomDigits}`
 
   // 2. Create auction
   const { data: auction, error: auctionError } = await supabase
@@ -192,14 +193,51 @@ export async function placeBid(playerId: string, teamId: string, bidAmount: numb
   // 1. Fetch current player state
   const { data: player, error: playerError } = await supabase
     .from("players")
-    .select("base_price, current_bid, status, auction_id")
+    .select("name, nationality, base_price, current_bid, status, auction_id, winning_team_id")
     .eq("id", playerId)
     .single();
 
   if (playerError || !player) throw new Error("Player not found");
   if (player.status !== "Active") throw new Error("This player is no longer active");
 
-  // 2. Safe Math & Logic
+  // Prevent bidding against yourself
+  if (player.winning_team_id === teamId) {
+    throw new Error("You already hold the highest bid");
+  }
+
+  // 2. Fetch Auction Rules
+  const { data: auction, error: auctionError } = await supabase
+    .from("auctions")
+    .select("rules")
+    .eq("id", player.auction_id)
+    .single();
+
+  if (auctionError || !auction) throw new Error("Auction rules not found");
+  const rules = auction.rules as any;
+
+  // 3. Fetch Team's Current Squad
+  const { data: teamSquad, error: squadError } = await supabase
+    .from("players")
+    .select("nationality")
+    .eq("winning_team_id", teamId)
+    .eq("status", "Sold");
+
+  if (squadError) throw new Error("Failed to verify squad limits");
+
+  const squadSize = teamSquad.length;
+  const overseasCount = teamSquad.filter(p => p.nationality !== "IND").length;
+
+  // Validation: Max Squad Size
+  if (squadSize >= rules.maxSquad) {
+    throw new Error(`Squad is full! Maximum limit of ${rules.maxSquad} players reached.`);
+  }
+
+  // Validation: Overseas Limit
+  if (player.nationality !== "IND" && overseasCount >= rules.maxOverseas) {
+    throw new Error(`Max overseas limit reached! You already have ${overseasCount}/${rules.maxOverseas} overseas players.`);
+  }
+
+  // 4. Safe Math & Logic
   const currentDbBid = player.current_bid === null ? 0 : Number(player.current_bid);
   const basePrice = Number(player.base_price);
 
@@ -213,7 +251,7 @@ export async function placeBid(playerId: string, teamId: string, bidAmount: numb
     throw new Error(`Opening bid must be at least the base price (${basePrice} CR)`);
   }
 
-  // 3. Fetch team's purse
+  // 5. Fetch team's purse
   const { data: team, error: teamError } = await supabase
     .from("teams")
     .select("purse_remaining")
@@ -223,7 +261,7 @@ export async function placeBid(playerId: string, teamId: string, bidAmount: numb
   if (teamError || !team) throw new Error("Team not found");
   if (incomingBid > Number(team.purse_remaining)) throw new Error("Insufficient purse remaining!");
 
-  // 4. Compare-and-Swap Update
+  // 6. Compare-and-Swap Update
   // We lock the update to the exact current_bid value we fetched.
   // If it changed between the fetch and this call, the update will fail.
   let query = supabase
@@ -248,7 +286,7 @@ export async function placeBid(playerId: string, teamId: string, bidAmount: numb
     throw new Error("Bid was too slow! Someone else already updated the price.");
   }
 
-  // 5. Log to history on success
+  // 7. Log to history on success
   const { error: historyError } = await supabase
     .from("bid_history")
     .insert({
@@ -265,8 +303,8 @@ export async function placeBid(playerId: string, teamId: string, bidAmount: numb
   return updatedPlayer;
 }
 
-export async function sellPlayer(playerId: string) {
-  // 1. Fetch player
+export async function sellPlayer(playerId: string, roomId: string) {
+  // 1. Fetch player to get latest bid details
   const { data: player, error: playerError } = await supabase
     .from("players")
     .select("*")
@@ -274,48 +312,59 @@ export async function sellPlayer(playerId: string) {
     .single()
 
   if (playerError || !player) throw new Error("Player not found")
-  if (player.status !== "Active") throw new Error("Player is not active")
-  
-  if (!player.winning_team_id || !player.current_bid) {
-    // No one bid, reset to Unsold
-    await supabase.from("players").update({ status: "Unsold", current_bid: 0, winning_team_id: null }).eq("id", playerId)
+  if (player.status !== "Active") return // Already processed
+
+  // 2. If no one bid, mark as Unsold and exit
+  if (!player.winning_team_id || !player.current_bid || player.current_bid === 0) {
+    await supabase
+      .from("players")
+      .update({ status: "Unsold", current_bid: 0, winning_team_id: null })
+      .eq("id", playerId)
     return
   }
 
-  // 2. Update player to Sold
-  const { error: updatePlayerError } = await supabase
+  // 3. Mark as Sold (with a check to prevent race conditions)
+  const { data: soldPlayer, error: updatePlayerError } = await supabase
     .from("players")
     .update({ status: "Sold" })
     .eq("id", playerId)
-
-  if (updatePlayerError) throw new Error("Failed to sell player")
-
-  // 3. Subtract from team purse
-  const { data: team, error: teamFetchError } = await supabase
-    .from("teams")
-    .select("purse_remaining")
-    .eq("id", player.winning_team_id)
+    .eq("status", "Active")
+    .select()
     .single()
 
-  if (teamFetchError || !team) {
-    console.error("Team fetch error during sale:", teamFetchError)
+  if (updatePlayerError || !soldPlayer) {
+    console.log("Player already sold or status changed")
     return
   }
 
+  // 4. Fetch the winning team's current purse
+  const { data: team, error: teamFetchError } = await supabase
+    .from("teams")
+    .select("purse_remaining")
+    .eq("id", soldPlayer.winning_team_id)
+    .single()
+
+  if (teamFetchError || !team) {
+    console.error("Critical: Could not fetch winning team's purse", teamFetchError)
+    return
+  }
+
+  // 5. Safe Math Deduction
   const currentPurse = Number(team.purse_remaining)
-  const finalPrice = Number(player.current_bid)
+  const finalPrice = Number(soldPlayer.current_bid)
   const newPurse = Number((currentPurse - finalPrice).toFixed(2))
 
-  console.log(`Finalizing Sale: Team ${player.winning_team_id} bought ${player.name} for ${finalPrice}. New Purse: ${newPurse}`)
-
+  // 6. Update the teams table
   const { error: purseUpdateError } = await supabase
     .from("teams")
     .update({ purse_remaining: newPurse })
-    .eq("id", player.winning_team_id)
+    .eq("id", soldPlayer.winning_team_id)
 
   if (purseUpdateError) {
-    console.error("Purse Update Failed:", purseUpdateError)
+    console.error("Critical: Purse Update Failed for team", soldPlayer.winning_team_id, purseUpdateError)
   }
+
+  console.log(`Transaction Complete: ${soldPlayer.name} sold to team ${soldPlayer.winning_team_id} for ${finalPrice}. New Purse: ${newPurse}`)
 }
 
 export async function sendChat(auctionId: string, teamName: string, message: string) {
@@ -331,4 +380,30 @@ export async function sendChat(auctionId: string, teamName: string, message: str
 
   if (error) throw new Error("Failed to send message")
   return data
+}
+
+export async function endAuction(auctionId: string) {
+  const { error } = await supabase
+    .from("auctions")
+    .update({ status: "Completed" })
+    .eq("id", auctionId)
+
+  if (error) throw new Error("Failed to end auction")
+}
+
+export async function setCaptain(playerId: string, teamId: string) {
+  // 1. Unset existing captain for this team
+  await supabase
+    .from("players")
+    .update({ is_captain: false })
+    .eq("winning_team_id", teamId)
+
+  // 2. Set new captain
+  const { error } = await supabase
+    .from("players")
+    .update({ is_captain: true })
+    .eq("id", playerId)
+    .eq("winning_team_id", teamId)
+
+  if (error) throw new Error("Failed to set captain")
 }
