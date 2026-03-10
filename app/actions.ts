@@ -391,6 +391,16 @@ export async function endAuction(auctionId: string) {
   if (error) throw new Error("Failed to end auction")
 }
 
+export async function resetUnsoldPlayers(auctionId: string) {
+  const { error } = await supabase
+    .from("players")
+    .update({ status: "Pending" })
+    .eq("auction_id", auctionId)
+    .eq("status", "Unsold")
+
+  if (error) throw new Error("Failed to reset unsold players")
+}
+
 export async function setCaptain(playerId: string, teamId: string) {
   // 1. Unset existing captain for this team
   await supabase

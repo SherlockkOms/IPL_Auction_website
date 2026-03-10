@@ -35,12 +35,13 @@ import {
   AlertTriangle,
   Download,
   Power,
-  Crown
+  Crown,
+  Zap
 } from "lucide-react"
 
 import { useParams, useSearchParams } from "next/navigation"
 import { supabase } from "@/lib/supabase"
-import { bringToHammer, placeBid, sellPlayer, sendChat, endAuction, setCaptain } from "../../actions"
+import { bringToHammer, placeBid, sellPlayer, sendChat, endAuction, setCaptain, resetUnsoldPlayers } from "../../actions"
 import Papa from "papaparse"
 
 import { useToast } from "@/hooks/use-toast"
@@ -155,6 +156,7 @@ export default function LiveDashboard() {
   const [bidInput, setBidInput] = useState("")
   const [playerSearch, setPlayerSearch] = useState("")
   const [activeCategory, setActiveCategory] = useState("All")
+  const [squadAvailableCategory, setSquadAvailableCategory] = useState("All")
   const [auctionStatus, setAuctionStatus] = useState<string>("Active")
   const [selectedSquadTeamId, setSelectedSquadTeamId] = useState<string | null>(null)
   const [auctionRules, setAuctionRules] = useState<any>(null)
@@ -294,10 +296,10 @@ export default function LiveDashboard() {
     }
   }, [auctionId, room_code])
 
-  const unsoldPlayers = players.filter(p => p.status === "Unsold")
+  const unsoldPlayers = players.filter(p => p.status === "Pending")
   const winningTeam = teams.find(t => t.id === activePlayer?.winning_team_id)
 
-  // Filter unsold players based on search & category
+  // Filter unsold players based on search & category (Admin Pane)
   const filteredPlayers = unsoldPlayers.filter(player => {
     const searchLower = playerSearch.toLowerCase()
     const matchesSearch = player.name.toLowerCase().includes(searchLower) ||
@@ -305,6 +307,11 @@ export default function LiveDashboard() {
     const matchesCategory = activeCategory === "All" || player.role === activeCategory
     return matchesSearch && matchesCategory
   })
+
+  // Filter available players for Squad Drawer (Available Tab)
+  const squadAvailablePlayers = players
+    .filter(p => p.status === "Pending")
+    .filter(p => squadAvailableCategory === "All" || p.role === squadAvailableCategory)
 
   // Countdown timer effect
   useEffect(() => {
@@ -559,6 +566,25 @@ export default function LiveDashboard() {
     }
   }
 
+  const handleResetUnsold = async () => {
+    if (!auctionId) return
+    if (!window.confirm("Are you sure you want to bring all Unsold players back? This will set them to 'Pending' for the Accelerated Round.")) return
+
+    try {
+      await resetUnsoldPlayers(auctionId)
+      toast({
+        title: "Accelerated Round Started",
+        description: "All unsold players have been moved to Pending.",
+      })
+    } catch (error) {
+      toast({
+        variant: "destructive",
+        title: "Error",
+        description: "Failed to reset players"
+      })
+    }
+  }
+
   const selectedTeamData = teams.find(t => t.id === selectedSquadTeamId)
 
   return (
@@ -582,194 +608,249 @@ export default function LiveDashboard() {
                   </Button>
                 </SheetTrigger>
                 <SheetContent side="left" className="w-full sm:max-w-[540px] md:max-w-[650px] bg-card border-r border-border flex flex-col p-0">
-                  <div className="p-6 border-b border-border shrink-0">
-                    <SheetHeader className="pb-4">
-                      <SheetTitle className="flex items-center justify-between">
-                        <div className="flex items-center gap-2">
-                          <Trophy className="h-5 w-5 text-accent" />
-                          Squad Tracker
-                        </div>
-                        <Button 
-                          variant="ghost" 
-                          size="sm" 
-                          onClick={() => handleExportCSV(selectedSquadTeamId)}
-                          className="text-xs h-8 gap-1.5 hover:bg-accent/10 hover:text-accent"
-                        >
-                          <Download className="h-3.5 w-3.5" />
-                          Export
-                        </Button>
-                      </SheetTitle>
-                    </SheetHeader>
-
-                    {/* Team Selector Dropdown */}
-                    <div className="space-y-4">
-                      <div className="flex flex-col gap-1.5">
-                        <label className="text-[10px] uppercase font-bold text-muted-foreground tracking-wider">Select Team</label>
-                        <select 
-                          value={selectedSquadTeamId || ""}
-                          onChange={(e) => setSelectedSquadTeamId(e.target.value)}
-                          className="w-full h-10 bg-secondary/50 border border-border rounded-md px-3 text-sm focus:ring-1 focus:ring-primary outline-none"
-                        >
-                          {teams.filter(t => !!t.manager_name).map(t => (
-                            <option key={t.id} value={t.id}>
-                              {t.team_name} {t.id === myTeam.id ? "(My Team)" : ""}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-
-                      {/* Rule Trackers */}
-                      {selectedTeamData && auctionRules && (
-                        <div className="space-y-2">
-                          <div className="grid grid-cols-3 gap-2">
-                            {(() => {
-                              const squad = players.filter(p => p.winning_team_id === selectedTeamData.id && p.status === "Sold")
-                              const overseas = squad.filter(p => p.nationality !== "IND").length
-                              const localCount = squad.filter(p => p.team === IPL_TEAM_META[selectedTeamData.team_name]?.short).length
-                              
-                              const isOverseasValid = overseas <= (auctionRules.maxOverseas || 8)
-                              const isSquadValid = squad.length >= (auctionRules.minSquad || 15)
-
-                              return (
-                                <>
-                                  <div className={`p-2 rounded-lg border flex flex-col gap-0.5 ${overseas > 0 ? (isOverseasValid ? "bg-green-500/10 border-green-500/20" : "bg-red-500/10 border-red-500/20") : "bg-secondary/30 border-border/50"}`}>
-                                    <span className="text-[9px] font-bold text-muted-foreground uppercase">Overseas</span>
-                                    <div className="flex items-baseline gap-1">
-                                      <span className={`text-lg font-bold ${overseas > 0 && isOverseasValid ? "text-green-500" : ""}`}>{overseas}</span>
-                                      <span className="text-[10px] text-muted-foreground">/{auctionRules.maxOverseas}</span>
-                                    </div>
-                                  </div>
-                                  <div className={`p-2 rounded-lg border flex flex-col gap-0.5 ${localCount > 0 ? "bg-blue-500/10 border-blue-500/20" : "bg-secondary/30 border-border/50"}`}>
-                                    <span className="text-[9px] font-bold text-muted-foreground uppercase">Local</span>
-                                    <div className="flex items-baseline gap-1">
-                                      <span className={`text-lg font-bold ${localCount > 0 ? "text-blue-400" : ""}`}>{localCount}</span>
-                                      <span className="text-[10px] text-muted-foreground">Original</span>
-                                    </div>
-                                  </div>
-                                  <div className={`p-2 rounded-lg border flex flex-col gap-0.5 ${squad.length > 0 ? (isSquadValid ? "bg-green-500/10 border-green-500/20" : "bg-yellow-500/10 border-yellow-500/20") : "bg-secondary/30 border-border/50"}`}>
-                                    <span className="text-[9px] font-bold text-muted-foreground uppercase">Squad</span>
-                                    <div className="flex items-baseline gap-1">
-                                      <span className={`text-lg font-bold ${isSquadValid ? "text-green-500" : ""}`}>{squad.length}</span>
-                                      <span className="text-[10px] text-muted-foreground">/{auctionRules.maxSquad}</span>
-                                    </div>
-                                  </div>
-                                </>
-                              )
-                            })()}
+                  <Tabs defaultValue="squad" className="flex-1 flex flex-col min-h-0">
+                    <div className="p-6 border-b border-border shrink-0">
+                      <SheetHeader>
+                        <SheetTitle className="flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <Trophy className="h-5 w-5 text-accent" />
+                            Strategy Hub
                           </div>
-
-                          {/* Position Trackers */}
-                          <div className="grid grid-cols-3 gap-2">
-                            {(() => {
-                              const squad = players.filter(p => p.winning_team_id === selectedTeamData.id && p.status === "Sold")
-                              const batters = squad.filter(p => p.role === "Batter").length
-                              const bowlers = squad.filter(p => p.role === "Bowler").length
-                              const keepers = squad.filter(p => p.role === "WK-Batter").length
-
-                              return (
-                                <>
-                                  <div className="p-2 rounded-lg border bg-secondary/30 border-border/50 flex flex-col gap-0.5">
-                                    <span className="text-[9px] font-bold text-muted-foreground uppercase">Keepers</span>
-                                    <div className="flex items-baseline gap-1">
-                                      <span className={`text-lg font-bold ${keepers > 0 ? "text-primary" : "text-muted-foreground"}`}>{keepers}</span>
-                                      <span className="text-[10px] text-muted-foreground">WK</span>
-                                    </div>
-                                  </div>
-                                  <div className="p-2 rounded-lg border bg-secondary/30 border-border/50 flex flex-col gap-0.5">
-                                    <span className="text-[9px] font-bold text-muted-foreground uppercase">Batters</span>
-                                    <div className="flex items-baseline gap-1">
-                                      <span className={`text-lg font-bold ${batters > 0 ? "text-primary" : "text-muted-foreground"}`}>{batters}</span>
-                                      <span className="text-[10px] text-muted-foreground">BAT</span>
-                                    </div>
-                                  </div>
-                                  <div className="p-2 rounded-lg border bg-secondary/30 border-border/50 flex flex-col gap-0.5">
-                                    <span className="text-[9px] font-bold text-muted-foreground uppercase">Bowlers</span>
-                                    <div className="flex items-baseline gap-1">
-                                      <span className={`text-lg font-bold ${bowlers > 0 ? "text-primary" : "text-muted-foreground"}`}>{bowlers}</span>
-                                      <span className="text-[10px] text-muted-foreground">BOWL</span>
-                                    </div>
-                                  </div>
-                                </>
-                              )
-                            })()}
+                          <div className="flex items-center gap-2">
+                            <TabsList className="bg-secondary/50">
+                              <TabsTrigger value="squad" className="text-xs">My Squad</TabsTrigger>
+                              <TabsTrigger value="available" className="text-xs text-nowrap">Available Pool</TabsTrigger>
+                            </TabsList>
+                            <Button 
+                              variant="ghost" 
+                              size="sm" 
+                              onClick={() => handleExportCSV(selectedSquadTeamId)}
+                              className="text-xs h-8 gap-1.5 hover:bg-accent/10 hover:text-accent"
+                            >
+                              <Download className="h-3.5 w-3.5" />
+                              Export
+                            </Button>
                           </div>
-                        </div>
-                      )}
+                        </SheetTitle>
+                      </SheetHeader>
                     </div>
-                  </div>
 
-                  <div className="flex-1 min-h-0">
-                    <ScrollArea className="h-full">
-                      <div className="p-6 space-y-6">
-                        {["Batter", "Bowler", "All-rounder", "WK-Batter"].map(role => {
-                          const rolePlayers = players.filter(p => 
-                            p.winning_team_id === selectedSquadTeamId && 
-                            p.status === "Sold" && 
-                            p.role === role
-                          )
-                          if (rolePlayers.length === 0) return null
-                          
-                          return (
-                            <div key={role} className="space-y-3">
-                              <h3 className="text-sm font-bold flex items-center gap-2 text-primary">
-                                <div className="w-1 h-4 bg-primary rounded-full" />
-                                {role === "WK-Batter" ? "Wicket Keepers" : `${role}s`}
-                                <Badge variant="secondary" className="ml-auto text-[10px]">{rolePlayers.length}</Badge>
-                              </h3>
-                              <div className="grid gap-2">
-                                {rolePlayers.map(p => (
-                                  <div key={p.id} className="flex items-center justify-between p-3 rounded-lg bg-secondary/30 border border-border/50 group hover:border-primary/30 transition-all">
-                                    <div className="flex items-center gap-3 min-w-0">
-                                      <div className="flex flex-col min-w-0">
-                                        <div className="flex items-center gap-2">
-                                          <span className="text-sm font-semibold truncate">{p.name}</span>
-                                          {p.is_captain && <Crown className="h-3.5 w-3.5 text-yellow-500 fill-yellow-500" />}
-                                        </div>
-                                        <span className="text-[10px] text-muted-foreground uppercase tracking-tighter truncate">
-                                          {p.nationality} • {p.team} 
-                                          {p.team === IPL_TEAM_META[selectedTeamData?.team_name || ""]?.short && (
-                                            <span className="ml-1 text-blue-400 font-bold">(Local)</span>
-                                          )}
-                                        </span>
+                    <TabsContent value="squad" className="flex-1 min-h-0 m-0 flex flex-col">
+                      <div className="p-6 border-b border-border shrink-0 space-y-4">
+                        <div className="flex flex-col gap-1.5">
+                          <label className="text-[10px] uppercase font-bold text-muted-foreground tracking-wider">Select Team</label>
+                          <select 
+                            value={selectedSquadTeamId || ""}
+                            onChange={(e) => setSelectedSquadTeamId(e.target.value)}
+                            className="w-full h-10 bg-secondary/50 border border-border rounded-md px-3 text-sm focus:ring-1 focus:ring-primary outline-none"
+                          >
+                            {teams.filter(t => !!t.manager_name).map(t => (
+                              <option key={t.id} value={t.id}>
+                                {t.team_name} {t.id === myTeam.id ? "(My Team)" : ""}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+
+                        {selectedTeamData && auctionRules && (
+                          <div className="space-y-2">
+                            <div className="grid grid-cols-3 gap-2">
+                              {(() => {
+                                const squad = players.filter(p => p.winning_team_id === selectedTeamData.id && p.status === "Sold")
+                                const overseas = squad.filter(p => p.nationality !== "IND").length
+                                const localCount = squad.filter(p => p.team === IPL_TEAM_META[selectedTeamData.team_name]?.short).length
+                                const isOverseasValid = overseas <= (auctionRules.maxOverseas || 8)
+                                const isSquadValid = squad.length >= (auctionRules.minSquad || 15)
+
+                                return (
+                                  <>
+                                    <div className={`p-2 rounded-lg border flex flex-col gap-0.5 ${overseas > 0 ? (isOverseasValid ? "bg-green-500/10 border-green-500/20" : "bg-red-500/10 border-red-500/20") : "bg-secondary/30 border-border/50"}`}>
+                                      <span className="text-[9px] font-bold text-muted-foreground uppercase">Overseas</span>
+                                      <div className="flex items-baseline gap-1">
+                                        <span className={`text-lg font-bold ${overseas > 0 && isOverseasValid ? "text-green-500" : ""}`}>{overseas}</span>
+                                        <span className="text-[10px] text-muted-foreground">/{auctionRules.maxOverseas}</span>
                                       </div>
                                     </div>
-                                    <div className="flex items-center gap-3 shrink-0 ml-4">
-                                      <span className="text-sm font-bold text-primary whitespace-nowrap">{p.current_bid} CR</span>
-                                      {selectedSquadTeamId === myTeam.id && !p.is_captain && (
-                                        <Button 
-                                          variant="ghost" 
-                                          size="sm" 
-                                          onClick={() => handleSetCaptain(p.id)}
-                                          className="h-8 px-3 text-[11px] opacity-0 group-hover:opacity-100 bg-primary/10 hover:bg-primary hover:text-primary-foreground transition-all shrink-0"
-                                        >
-                                          Set Captain
-                                        </Button>
-                                      )}
+                                    <div className={`p-2 rounded-lg border flex flex-col gap-0.5 ${localCount > 0 ? "bg-blue-500/10 border-blue-500/20" : "bg-secondary/30 border-border/50"}`}>
+                                      <span className="text-[9px] font-bold text-muted-foreground uppercase">Local</span>
+                                      <div className="flex items-baseline gap-1">
+                                        <span className={`text-lg font-bold ${localCount > 0 ? "text-blue-400" : ""}`}>{localCount}</span>
+                                        <span className="text-[10px] text-muted-foreground">Original</span>
+                                      </div>
                                     </div>
-                                  </div>
-                                ))}
-                              </div>
+                                    <div className={`p-2 rounded-lg border flex flex-col gap-0.5 ${squad.length > 0 ? (isSquadValid ? "bg-green-500/10 border-green-500/20" : "bg-yellow-500/10 border-yellow-500/20") : "bg-secondary/30 border-border/50"}`}>
+                                      <span className="text-[9px] font-bold text-muted-foreground uppercase">Squad</span>
+                                      <div className="flex items-baseline gap-1">
+                                        <span className={`text-lg font-bold ${isSquadValid ? "text-green-500" : ""}`}>{squad.length}</span>
+                                        <span className="text-[10px] text-muted-foreground">/{auctionRules.maxSquad}</span>
+                                      </div>
+                                    </div>
+                                  </>
+                                )
+                              })()}
                             </div>
-                          )
-                        })}
-                        {(!selectedSquadTeamId || players.filter(p => p.winning_team_id === selectedSquadTeamId && p.status === "Sold").length === 0) && (
-                          <div className="h-40 flex flex-col items-center justify-center text-muted-foreground gap-2">
-                            <Users className="h-8 w-8 opacity-20" />
-                            <p className="text-sm">No players bought yet</p>
+                            <div className="grid grid-cols-3 gap-2">
+                              {(() => {
+                                const squad = players.filter(p => p.winning_team_id === selectedTeamData.id && p.status === "Sold")
+                                const batters = squad.filter(p => p.role === "Batter").length
+                                const bowlers = squad.filter(p => p.role === "Bowler").length
+                                const keepers = squad.filter(p => p.role === "WK-Batter").length
+                                return (
+                                  <>
+                                    <div className="p-2 rounded-lg border bg-secondary/30 border-border/50 flex flex-col gap-0.5">
+                                      <span className="text-[9px] font-bold text-muted-foreground uppercase">Keepers</span>
+                                      <div className="flex items-baseline gap-1">
+                                        <span className={`text-lg font-bold ${keepers > 0 ? "text-primary" : "text-muted-foreground"}`}>{keepers}</span>
+                                        <span className="text-[10px] text-muted-foreground">WK</span>
+                                      </div>
+                                    </div>
+                                    <div className="p-2 rounded-lg border bg-secondary/30 border-border/50 flex flex-col gap-0.5">
+                                      <span className="text-[9px] font-bold text-muted-foreground uppercase">Batters</span>
+                                      <div className="flex items-baseline gap-1">
+                                        <span className={`text-lg font-bold ${batters > 0 ? "text-primary" : "text-muted-foreground"}`}>{batters}</span>
+                                        <span className="text-[10px] text-muted-foreground">BAT</span>
+                                      </div>
+                                    </div>
+                                    <div className="p-2 rounded-lg border bg-secondary/30 border-border/50 flex flex-col gap-0.5">
+                                      <span className="text-[9px] font-bold text-muted-foreground uppercase">Bowlers</span>
+                                      <div className="flex items-baseline gap-1">
+                                        <span className={`text-lg font-bold ${bowlers > 0 ? "text-primary" : "text-muted-foreground"}`}>{bowlers}</span>
+                                        <span className="text-[10px] text-muted-foreground">BOWL</span>
+                                      </div>
+                                    </div>
+                                  </>
+                                )
+                              })()}
+                            </div>
                           </div>
                         )}
                       </div>
-                    </ScrollArea>
-                  </div>
+                      <ScrollArea className="flex-1 h-full">
+                        <div className="p-6 space-y-6">
+                          {["Batter", "Bowler", "All-rounder", "WK-Batter"].map(role => {
+                            const rolePlayers = players.filter(p => 
+                              p.winning_team_id === selectedSquadTeamId && 
+                              p.status === "Sold" && 
+                              p.role === role
+                            )
+                            if (rolePlayers.length === 0) return null
+                            return (
+                              <div key={role} className="space-y-3">
+                                <h3 className="text-sm font-bold flex items-center gap-2 text-primary">
+                                  <div className="w-1 h-4 bg-primary rounded-full" />
+                                  {role === "WK-Batter" ? "Wicket Keepers" : `${role}s`}
+                                  <Badge variant="secondary" className="ml-auto text-[10px]">{rolePlayers.length}</Badge>
+                                </h3>
+                                <div className="grid gap-2">
+                                  {rolePlayers.map(p => (
+                                    <div key={p.id} className="flex items-center justify-between p-3 rounded-lg bg-secondary/30 border border-border/50 group hover:border-primary/30 transition-all">
+                                      <div className="flex items-center gap-3 min-w-0">
+                                        <div className="flex flex-col min-w-0">
+                                          <div className="flex items-center gap-2">
+                                            <span className="text-sm font-semibold truncate">{p.name}</span>
+                                            {p.is_captain && <Crown className="h-3.5 w-3.5 text-yellow-500 fill-yellow-500" />}
+                                          </div>
+                                          <span className="text-[10px] text-muted-foreground uppercase tracking-tighter truncate">
+                                            {p.nationality} • {p.team} 
+                                            {p.team === IPL_TEAM_META[selectedTeamData?.team_name || ""]?.short && (
+                                              <span className="ml-1 text-blue-400 font-bold">(Local)</span>
+                                            )}
+                                          </span>
+                                        </div>
+                                      </div>
+                                      <div className="flex items-center gap-3 shrink-0 ml-4">
+                                        <span className="text-sm font-bold text-primary whitespace-nowrap">{p.current_bid} CR</span>
+                                        {selectedSquadTeamId === myTeam.id && !p.is_captain && (
+                                          <Button 
+                                            variant="ghost" 
+                                            size="sm" 
+                                            onClick={() => handleSetCaptain(p.id)}
+                                            className="h-8 px-3 text-[11px] opacity-0 group-hover:opacity-100 bg-primary/10 hover:bg-primary hover:text-primary-foreground transition-all shrink-0"
+                                          >
+                                            Set Captain
+                                          </Button>
+                                        )}
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            )
+                          })}
+                          {(!selectedSquadTeamId || players.filter(p => p.winning_team_id === selectedSquadTeamId && p.status === "Sold").length === 0) && (
+                            <div className="h-40 flex flex-col items-center justify-center text-muted-foreground gap-2">
+                              <Users className="h-8 w-8 opacity-20" />
+                              <p className="text-sm">No players bought yet</p>
+                            </div>
+                          )}
+                        </div>
+                      </ScrollArea>
+                      {selectedTeamData && (
+                        <div className="p-6 border-t border-border bg-secondary/20 shrink-0">
+                          <div className="flex items-center justify-between text-sm">
+                            <span className="text-muted-foreground">Budget Remaining</span>
+                            <span className="font-bold text-lg text-primary">{selectedTeamData.purse_remaining} CR</span>
+                          </div>
+                        </div>
+                      )}
+                    </TabsContent>
 
-                  {selectedTeamData && (
-                    <div className="p-6 border-t border-border bg-secondary/20 shrink-0">
-                      <div className="flex items-center justify-between text-sm">
-                        <span className="text-muted-foreground">Budget Remaining</span>
-                        <span className="font-bold text-lg text-primary">{selectedTeamData.purse_remaining} CR</span>
+                    <TabsContent value="available" className="flex-1 min-h-0 m-0 flex flex-col">
+                      <div className="p-6 border-b border-border shrink-0 bg-secondary/10">
+                        <Tabs value={squadAvailableCategory} onValueChange={setSquadAvailableCategory} className="w-full">
+                          <TabsList className="grid w-full grid-cols-5 bg-secondary/50 h-10 p-1">
+                            <TabsTrigger value="All" className="text-xs">All</TabsTrigger>
+                            <TabsTrigger value="Batter" className="text-xs">BAT</TabsTrigger>
+                            <TabsTrigger value="Bowler" className="text-xs">BOWL</TabsTrigger>
+                            <TabsTrigger value="All-rounder" className="text-xs text-nowrap">A-R</TabsTrigger>
+                            <TabsTrigger value="WK-Batter" className="text-xs">WK</TabsTrigger>
+                          </TabsList>
+                        </Tabs>
+                        <div className="mt-3 flex items-center justify-between text-xs text-muted-foreground">
+                          <span className="font-semibold text-foreground flex items-center gap-1.5">
+                            <Users className="h-3.5 w-3.5 text-primary" />
+                            Remaining ({squadAvailablePlayers.length})
+                          </span>
+                        </div>
                       </div>
-                    </div>
-                  )}
+                      <ScrollArea className="flex-1 h-full">
+                        <Table>
+                          <TableHeader className="sticky top-0 bg-background z-10 shadow-sm">
+                            <TableRow className="border-border/50 hover:bg-transparent">
+                              <TableHead className="text-muted-foreground text-xs">Name</TableHead>
+                              <TableHead className="text-muted-foreground text-xs">Role</TableHead>
+                              <TableHead className="text-muted-foreground text-xs text-right">Base</TableHead>
+                            </TableRow>
+                          </TableHeader>
+                          <TableBody>
+                            {squadAvailablePlayers.map((p) => (
+                              <TableRow key={p.id} className="border-border/30 hover:bg-secondary/30">
+                                <TableCell className="py-2">
+                                  <div className="flex flex-col">
+                                    <span className="font-medium text-foreground text-sm">{p.name}</span>
+                                    <span className="text-[10px] text-muted-foreground uppercase">{p.nationality} • {p.team}</span>
+                                  </div>
+                                </TableCell>
+                                <TableCell className="py-2 text-xs text-muted-foreground">
+                                  {p.role}
+                                </TableCell>
+                                <TableCell className="py-2 text-right text-sm font-medium text-primary">
+                                  {p.base_price} CR
+                                </TableCell>
+                              </TableRow>
+                            ))}
+                            {squadAvailablePlayers.length === 0 && (
+                              <TableRow>
+                                <TableCell colSpan={3} className="h-40 text-center text-muted-foreground">
+                                  No available players found in this category.
+                                </TableCell>
+                              </TableRow>
+                            )}
+                          </TableBody>
+                        </Table>
+                      </ScrollArea>
+                    </TabsContent>
+                  </Tabs>
                 </SheetContent>
               </Sheet>
             )}
@@ -901,9 +982,16 @@ export default function LiveDashboard() {
                                 >
                                   <TableCell className="py-2">
                                     <div className="flex flex-col">
-                                      <span className="font-medium text-foreground text-sm truncate max-w-[120px] sm:max-w-none">
-                                        {player.name}
-                                      </span>
+                                        <div className="flex items-center gap-2">
+                                          <span className="font-medium text-foreground text-sm truncate max-w-[120px] sm:max-w-none">
+                                            {player.name}
+                                          </span>
+                                          {player.status === "Pending" && (
+                                            <Badge variant="outline" className="text-[9px] h-4 px-1 border-orange-500/50 text-orange-500">
+                                              Pending
+                                            </Badge>
+                                          )}
+                                        </div>
                                       <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
                                         <span>{player.nationality}</span>
                                         <span className="w-1 h-1 rounded-full bg-muted-foreground/30" />
@@ -953,6 +1041,15 @@ export default function LiveDashboard() {
                         Force Sell / End Bid
                       </Button>
 
+                      <Button
+                        variant="outline"
+                        onClick={handleResetUnsold}
+                        disabled={auctionStatus === "Completed"}
+                        className="w-full h-12 font-bold text-base gap-2 border-orange-500/50 hover:bg-orange-500/10 text-orange-500 shadow-lg shadow-orange-900/10"
+                      >
+                        <Zap className="h-5 w-5" />
+                        Reset Unsold Players (Accelerated Round)
+                      </Button>
                       {auctionStatus !== "Completed" ? (
                         <Button
                           variant="outline"
