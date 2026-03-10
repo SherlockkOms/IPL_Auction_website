@@ -1,0 +1,4 @@
+- Need to get the budget in the live tracking page working it is not updating when a player is bought
+- need a frontend page to show squad details and criteria met like local and overseas players and budget remaining
+- need to add logic to bid so person who is currently winning the bid cannot bid again
+- need to add logic to ensure that when time runs out the player is sold to the highest bidder
