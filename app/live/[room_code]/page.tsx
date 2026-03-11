@@ -442,7 +442,9 @@ export default function LiveDashboard() {
         .eq("status", "Sold")
       
       if (filterTeamId) {
-        query = query.eq("winning_team_id", filterTeamId)
+        // Ensure we only use the ID string, not the object
+        const idToFilter = typeof filterTeamId === 'object' ? (filterTeamId as any).id : filterTeamId;
+        query = query.eq("winning_team_id", idToFilter)
       }
 
       const { data: soldPlayers, error: playersError } = await query
@@ -797,18 +799,23 @@ export default function LiveDashboard() {
                     <TabsContent value="available" className="flex-1 min-h-0 m-0 flex flex-col">
                       <div className="p-6 border-b border-border shrink-0 bg-secondary/10">
                         <Tabs value={squadAvailableCategory} onValueChange={setSquadAvailableCategory} className="w-full">
-                          <TabsList className="grid w-full grid-cols-5 bg-secondary/50 h-10 p-1">
-                            <TabsTrigger value="All" className="text-xs">All</TabsTrigger>
-                            <TabsTrigger value="Batter" className="text-xs">BAT</TabsTrigger>
-                            <TabsTrigger value="Bowler" className="text-xs">BOWL</TabsTrigger>
-                            <TabsTrigger value="Allrounder" className="text-xs text-nowrap">A-R</TabsTrigger>
-                            <TabsTrigger value="Wicketkeeper" className="text-xs">WK</TabsTrigger>
+                          <TabsList className="grid w-full grid-cols-6 bg-secondary/50 h-10 p-1">
+                            <TabsTrigger value="All" className="text-[10px]">All</TabsTrigger>
+                            <TabsTrigger value="Batter" className="text-[10px]">BAT</TabsTrigger>
+                            <TabsTrigger value="Bowler" className="text-[10px]">BOWL</TabsTrigger>
+                            <TabsTrigger value="Allrounder" className="text-[10px] text-nowrap">AR</TabsTrigger>
+                            <TabsTrigger value="Wicketkeeper" className="text-[10px]">WK</TabsTrigger>
+                            <TabsTrigger value="Unsold" className="text-[10px] text-red-400">UNSOLD</TabsTrigger>
                           </TabsList>
                         </Tabs>
                         <div className="mt-3 flex items-center justify-between text-xs text-muted-foreground">
                           <span className="font-semibold text-foreground flex items-center gap-1.5">
                             <Users className="h-3.5 w-3.5 text-primary" />
-                            Remaining ({squadAvailablePlayers.length})
+                            {squadAvailableCategory === "Unsold" ? "Unsold Pool" : "Remaining Pool"} ({
+                              squadAvailableCategory === "Unsold" 
+                                ? players.filter(p => p.status === "Unsold").length
+                                : squadAvailablePlayers.length
+                            })
                           </span>
                         </div>
                       </div>
@@ -822,7 +829,10 @@ export default function LiveDashboard() {
                             </TableRow>
                           </TableHeader>
                           <TableBody>
-                            {squadAvailablePlayers.map((p) => (
+                            {(squadAvailableCategory === "Unsold" 
+                              ? players.filter(p => p.status === "Unsold")
+                              : squadAvailablePlayers
+                            ).map((p) => (
                               <TableRow key={p.id} className="border-border/30 hover:bg-secondary/30">
                                 <TableCell className="py-2">
                                   <div className="flex flex-col">
@@ -838,10 +848,13 @@ export default function LiveDashboard() {
                                 </TableCell>
                               </TableRow>
                             ))}
-                            {squadAvailablePlayers.length === 0 && (
+                            {(squadAvailableCategory === "Unsold" 
+                              ? players.filter(p => p.status === "Unsold").length
+                              : squadAvailablePlayers.length
+                            ) === 0 && (
                               <TableRow>
                                 <TableCell colSpan={3} className="h-40 text-center text-muted-foreground">
-                                  No available players found in this category.
+                                  No players found in this category.
                                 </TableCell>
                               </TableRow>
                             )}
