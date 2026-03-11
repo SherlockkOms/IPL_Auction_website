@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useRef } from "react"
 import Link from "next/link"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -88,11 +88,11 @@ const IPL_TEAM_META: Record<string, { short: string; color: string }> = {
   "Royal Challengers Bangalore": { short: "RCB", color: "#EC1C24" },
   "Kolkata Knight Riders": { short: "KKR", color: "#3A225D" },
   "Delhi Capitals": { short: "DC", color: "#17479E" },
-  "Punjab Kings": { short: "PBKS" },
+  "Punjab Kings": { short: "PBKS", color: "#ED1B24" },
   "Rajasthan Royals": { short: "RR", color: "#EA1A85" },
   "Sunrisers Hyderabad": { short: "SRH", color: "#FF822A" },
-  "Gujarat Titans": { short: "GT", color: "#1C1C1C" },
-  "Lucknow Super Giants": { short: "LSG" , color: "#A72056" },
+  "Gujarat Titans": { short: "GT", color: "#E2E8F0" }, // Light slate/silver for visibility
+  "Lucknow Super Giants": { short: "LSG" , color: "#0057E7" },
 }
 
 // Mock bid history
@@ -160,6 +160,13 @@ export default function LiveDashboard() {
   const [auctionStatus, setAuctionStatus] = useState<string>("Active")
   const [selectedSquadTeamId, setSelectedSquadTeamId] = useState<string | null>(null)
   const [auctionRules, setAuctionRules] = useState<any>(null)
+
+  const chatEndRef = useRef<HTMLDivElement>(null)
+
+  // 0. Auto-scroll Chat
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ behavior: "smooth" })
+  }, [chatMessages])
 
   // 1. Initial Fetch
   useEffect(() => {
@@ -351,6 +358,19 @@ export default function LiveDashboard() {
     }
   }
 
+  const handleBidBase = async () => {
+    if (!activePlayer || !myTeam) return
+    try {
+      await placeBid(activePlayer.id, myTeam.id, activePlayer.base_price)
+    } catch (error: any) {
+      toast({
+        variant: "destructive",
+        title: "Bid Rejected",
+        description: error.message || "Failed to place bid"
+      })
+    }
+  }
+
   const handleSubmitBid = async () => {
     if (!activePlayer || !myTeam || !bidInput) return
     const newBid = parseFloat(bidInput)
@@ -441,8 +461,8 @@ export default function LiveDashboard() {
         .eq("auction_id", auctionId)
         .eq("status", "Sold")
       
-      // Only filter if we have a valid string ID (avoids MouseEvent objects)
-      if (filterTeamId && typeof filterTeamId === 'string') {
+      const isSpecificTeam = typeof filterTeamId === 'string'
+      if (isSpecificTeam) {
         query = query.eq("winning_team_id", filterTeamId)
       }
 
@@ -450,53 +470,54 @@ export default function LiveDashboard() {
       
       if (playersError || !soldPlayers) throw new Error("Failed to fetch players")
 
-      const isSpecificTeam = typeof filterTeamId === 'string'
       const targetTeam = isSpecificTeam ? teams.find(t => t.id === filterTeamId) : null
 
-      // --- SHEET 1: PLAYER DATA ---
-      const allSheet = workbook.addWorksheet(targetTeam ? `Squad - ${IPL_TEAM_META[targetTeam.team_name]?.short || "TEAM"}` : 'All Sold Players');
-      allSheet.columns = [
-        { header: 'Player', key: 'name', width: 25 },
-        { header: 'Nationality', key: 'nationality', width: 15 },
-        { header: 'Role', key: 'role', width: 15 },
-        { header: 'Original Team', key: 'team', width: 20 },
-        { header: 'Buying Team', key: 'buyingTeam', width: 10 },
-        { header: 'Manager', key: 'manager', width: 20 },
-        { header: 'Final Price (CR)', key: 'price', width: 15 },
-      ];
+      // Helper to add a squad sheet
+      const addSquadSheet = (teamData: Team, playersList: Player[]) => {
+        const shortName = IPL_TEAM_META[teamData.team_name]?.short || "TEAM"
+        const sheet = workbook.addWorksheet(`Squad - ${shortName}`);
+        sheet.columns = [
+          { header: 'Player', key: 'name', width: 25 },
+          { header: 'Nationality', key: 'nationality', width: 15 },
+          { header: 'Role', key: 'role', width: 15 },
+          { header: 'Original Team', key: 'team', width: 20 },
+          { header: 'Price (CR)', key: 'price', width: 15 },
+          { header: 'Designation', key: 'designation', width: 15 },
+        ];
 
-      allSheet.getRow(1).font = { bold: true };
-      allSheet.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE0E0E0' } };
+        sheet.getRow(1).font = { bold: true };
+        sheet.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE0E0E0' } };
 
-      const allDataRows = soldPlayers.map(p => {
-        const team = teams.find(t => t.id === p.winning_team_id)
-        return {
-          name: p.name + (p.is_captain ? " (C)" : ""),
+        const rows = playersList.map(p => ({
+          name: p.name,
           nationality: p.nationality,
           role: p.role,
           team: p.team,
-          buyingTeam: team ? (IPL_TEAM_META[team.team_name]?.short || team.team_name) : "???",
-          manager: team?.manager_name || "N/A",
-          price: p.current_bid
-        }
-      });
-      allSheet.addRows(allDataRows);
+          price: p.current_bid,
+          designation: p.is_captain ? "CAPTAIN" : "Player"
+        }));
+        sheet.addRows(rows);
+        
+        // Add Summary Info at the bottom
+        sheet.addRow([]);
+        sheet.addRow(['Total Spent', '', '', '', playersList.reduce((sum, p) => sum + (p.current_bid || 0), 0) + " CR"]);
+        sheet.addRow(['Remaining Purse', '', '', '', teamData.purse_remaining + " CR"]);
+      }
 
-      // --- SHEET 2: SUMMARY/STATS ---
-      if (!isSpecificTeam) {
+      // --- GENERATE SHEETS ---
+
+      if (isSpecificTeam && targetTeam) {
+        addSquadSheet(targetTeam, soldPlayers)
+      } else {
+        // 1. Summary Sheet
         const statsSheet = workbook.addWorksheet('Summary & Statistics');
         statsSheet.columns = [
           { header: 'Team', key: 'team', width: 25 },
           { header: 'Abbr', key: 'abbr', width: 10 },
           { header: 'Manager', key: 'manager', width: 20 },
-          { header: 'Players Bought', key: 'count', width: 15 },
-          { header: 'Total Spent (CR)', key: 'spent', width: 15 },
-          { header: 'Budget Left (CR)', key: 'budget', width: 15 },
-          { header: 'Batters', key: 'batters', width: 10 },
-          { header: 'Bowlers', key: 'bowlers', width: 10 },
-          { header: 'Allrounders', key: 'ar', width: 10 },
-          { header: 'Wicketkeepers', key: 'wk', width: 15 },
-          { header: 'Overseas', key: 'overseas', width: 10 },
+          { header: 'Players', key: 'count', width: 10 },
+          { header: 'Spent (CR)', key: 'spent', width: 15 },
+          { header: 'Budget Left', key: 'budget', width: 15 },
           { header: 'Captain', key: 'captain', width: 20 },
         ];
         statsSheet.getRow(1).font = { bold: true };
@@ -504,23 +525,50 @@ export default function LiveDashboard() {
 
         const teamStats = teams.filter(t => !!t.manager_name).map(team => {
           const teamPlayers = soldPlayers.filter(p => p.winning_team_id === team.id);
-          const spent = teamPlayers.reduce((sum, p) => sum + (p.current_bid || 0), 0);
           const captain = teamPlayers.find(p => p.is_captain);
           return {
             team: team.team_name,
             abbr: IPL_TEAM_META[team.team_name]?.short || "",
             manager: team.manager_name || "N/A",
             count: teamPlayers.length,
-            spent: Number(spent.toFixed(2)),
+            spent: teamPlayers.reduce((sum, p) => sum + (p.current_bid || 0), 0).toFixed(2),
             budget: team.purse_remaining,
-            batters: teamPlayers.filter(p => p.role === 'Batter').length,
-            bowlers: teamPlayers.filter(p => p.role === 'Bowler').length,
-            ar: teamPlayers.filter(p => p.role === 'Allrounder').length,
-            wk: teamPlayers.filter(p => p.role === 'Wicketkeeper').length,
-            overseas: teamPlayers.filter(p => p.nationality !== 'IND').length,
             captain: captain ? captain.name : "Not Assigned"
-            }
-            });        statsSheet.addRows(teamStats);
+          }
+        });
+        statsSheet.addRows(teamStats);
+
+        // 2. Individual Team Sheets
+        teams.filter(t => !!t.manager_name).forEach(team => {
+          const teamPlayers = soldPlayers.filter(p => p.winning_team_id === team.id);
+          addSquadSheet(team, teamPlayers);
+        });
+
+        // 3. All Players Master Sheet
+        const masterSheet = workbook.addWorksheet('All Sold Players');
+        masterSheet.columns = [
+          { header: 'Player', key: 'name', width: 25 },
+          { header: 'Nationality', key: 'nationality', width: 15 },
+          { header: 'Role', key: 'role', width: 15 },
+          { header: 'Original Team', key: 'team', width: 20 },
+          { header: 'Buying Team', key: 'buyingTeam', width: 15 },
+          { header: 'Final Price (CR)', key: 'price', width: 15 },
+        ];
+        masterSheet.getRow(1).font = { bold: true };
+        masterSheet.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE0E0E0' } };
+
+        const allDataRows = soldPlayers.map(p => {
+          const team = teams.find(t => t.id === p.winning_team_id)
+          return {
+            name: p.name + (p.is_captain ? " (C)" : ""),
+            nationality: p.nationality,
+            role: p.role,
+            team: p.team,
+            buyingTeam: team ? (IPL_TEAM_META[team.team_name]?.short || team.team_name) : "???",
+            price: p.current_bid
+          }
+        });
+        masterSheet.addRows(allDataRows);
       }
 
       // 4. Download XLSX
@@ -601,273 +649,7 @@ export default function LiveDashboard() {
               </Button>
             </Link>
             {myTeam && (
-              <Sheet>
-                <SheetTrigger asChild>
-                  <Button variant="outline" size="sm" className="gap-2 border-primary/30 hover:border-primary">
-                    <Users className="h-4 w-4 text-primary" />
-                    View Squads
-                  </Button>
-                </SheetTrigger>
-                <SheetContent side="left" className="w-full sm:max-w-[540px] md:max-w-[650px] bg-card border-r border-border flex flex-col p-0">
-                  <Tabs defaultValue="squad" className="flex-1 flex flex-col min-h-0">
-                    <div className="p-6 border-b border-border shrink-0">
-                      <SheetHeader>
-                        <SheetTitle className="flex items-center justify-between">
-                          <div className="flex items-center gap-2">
-                            <Trophy className="h-5 w-5 text-accent" />
-                            Strategy Hub
-                          </div>
-                          <div className="flex items-center gap-2">
-                            <TabsList className="bg-secondary/50">
-                              <TabsTrigger value="squad" className="text-xs">My Squad</TabsTrigger>
-                              <TabsTrigger value="available" className="text-xs text-nowrap">Available Pool</TabsTrigger>
-                            </TabsList>
-                            <Button 
-                              variant="ghost" 
-                              size="sm" 
-                              onClick={() => handleExportCSV(selectedSquadTeamId)}
-                              className="text-xs h-8 gap-1.5 hover:bg-accent/10 hover:text-accent"
-                            >
-                              <Download className="h-3.5 w-3.5" />
-                              Export
-                            </Button>
-                          </div>
-                        </SheetTitle>
-                      </SheetHeader>
-                    </div>
-
-                    <TabsContent value="squad" className="flex-1 min-h-0 m-0 flex flex-col">
-                      <div className="p-6 border-b border-border shrink-0 space-y-4">
-                        <div className="flex flex-col gap-1.5">
-                          <label className="text-[10px] uppercase font-bold text-muted-foreground tracking-wider">Select Team</label>
-                          <select 
-                            value={selectedSquadTeamId || ""}
-                            onChange={(e) => setSelectedSquadTeamId(e.target.value)}
-                            className="w-full h-10 bg-secondary/50 border border-border rounded-md px-3 text-sm focus:ring-1 focus:ring-primary outline-none"
-                          >
-                            {teams.filter(t => !!t.manager_name).map(t => (
-                              <option key={t.id} value={t.id}>
-                                {t.team_name} {t.id === myTeam.id ? "(My Team)" : ""}
-                              </option>
-                            ))}
-                          </select>
-                        </div>
-
-                        {selectedTeamData && auctionRules && (
-                          <div className="space-y-2">
-                            <div className="grid grid-cols-3 gap-2">
-                              {(() => {
-                                const squad = players.filter(p => p.winning_team_id === selectedTeamData.id && p.status === "Sold")
-                                const overseas = squad.filter(p => p.nationality !== "IND").length
-                                const localCount = squad.filter(p => p.team === IPL_TEAM_META[selectedTeamData.team_name]?.short).length
-                                const isOverseasValid = overseas <= (auctionRules.maxOverseas || 8)
-                                const isSquadValid = squad.length >= (auctionRules.minSquad || 15)
-
-                                return (
-                                  <>
-                                    <div className={`p-2 rounded-lg border flex flex-col gap-0.5 ${overseas > 0 ? (isOverseasValid ? "bg-green-500/10 border-green-500/20" : "bg-red-500/10 border-red-500/20") : "bg-secondary/30 border-border/50"}`}>
-                                      <span className="text-[9px] font-bold text-muted-foreground uppercase">Overseas</span>
-                                      <div className="flex items-baseline gap-1">
-                                        <span className={`text-lg font-bold ${overseas > 0 && isOverseasValid ? "text-green-500" : ""}`}>{overseas}</span>
-                                        <span className="text-[10px] text-muted-foreground">/{auctionRules.maxOverseas}</span>
-                                      </div>
-                                    </div>
-                                    <div className={`p-2 rounded-lg border flex flex-col gap-0.5 ${localCount > 0 ? "bg-blue-500/10 border-blue-500/20" : "bg-secondary/30 border-border/50"}`}>
-                                      <span className="text-[9px] font-bold text-muted-foreground uppercase">Local</span>
-                                      <div className="flex items-baseline gap-1">
-                                        <span className={`text-lg font-bold ${localCount > 0 ? "text-blue-400" : ""}`}>{localCount}</span>
-                                        <span className="text-[10px] text-muted-foreground">Original</span>
-                                      </div>
-                                    </div>
-                                    <div className={`p-2 rounded-lg border flex flex-col gap-0.5 ${squad.length > 0 ? (isSquadValid ? "bg-green-500/10 border-green-500/20" : "bg-yellow-500/10 border-yellow-500/20") : "bg-secondary/30 border-border/50"}`}>
-                                      <span className="text-[9px] font-bold text-muted-foreground uppercase">Squad</span>
-                                      <div className="flex items-baseline gap-1">
-                                        <span className={`text-lg font-bold ${isSquadValid ? "text-green-500" : ""}`}>{squad.length}</span>
-                                        <span className="text-[10px] text-muted-foreground">/{auctionRules.maxSquad}</span>
-                                      </div>
-                                    </div>
-                                  </>
-                                )
-                              })()}
-                            </div>
-                            <div className="grid grid-cols-3 gap-2">
-                              {(() => {
-                                const squad = players.filter(p => p.winning_team_id === selectedTeamData.id && p.status === "Sold")
-                                const batters = squad.filter(p => p.role === "Batter").length
-                                const bowlers = squad.filter(p => p.role === "Bowler").length
-                                const keepers = squad.filter(p => p.role === "Wicketkeeper").length
-                                return (
-                                  <>
-                                    <div className="p-2 rounded-lg border bg-secondary/30 border-border/50 flex flex-col gap-0.5">
-                                      <span className="text-[9px] font-bold text-muted-foreground uppercase">Keepers</span>
-                                      <div className="flex items-baseline gap-1">
-                                        <span className={`text-lg font-bold ${keepers > 0 ? "text-primary" : "text-muted-foreground"}`}>{keepers}</span>
-                                        <span className="text-[10px] text-muted-foreground">WK</span>
-                                      </div>
-                                    </div>
-                                    <div className="p-2 rounded-lg border bg-secondary/30 border-border/50 flex flex-col gap-0.5">
-                                      <span className="text-[9px] font-bold text-muted-foreground uppercase">Batters</span>
-                                      <div className="flex items-baseline gap-1">
-                                        <span className={`text-lg font-bold ${batters > 0 ? "text-primary" : "text-muted-foreground"}`}>{batters}</span>
-                                        <span className="text-[10px] text-muted-foreground">BAT</span>
-                                      </div>
-                                    </div>
-                                    <div className="p-2 rounded-lg border bg-secondary/30 border-border/50 flex flex-col gap-0.5">
-                                      <span className="text-[9px] font-bold text-muted-foreground uppercase">Bowlers</span>
-                                      <div className="flex items-baseline gap-1">
-                                        <span className={`text-lg font-bold ${bowlers > 0 ? "text-primary" : "text-muted-foreground"}`}>{bowlers}</span>
-                                        <span className="text-[10px] text-muted-foreground">BOWL</span>
-                                      </div>
-                                    </div>
-                                  </>
-                                )
-                              })()}
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                      <ScrollArea className="flex-1 h-full">
-                        <div className="p-6 space-y-6">
-                          {["Batter", "Bowler", "Allrounder", "Wicketkeeper"].map(role => {
-                            const rolePlayers = players.filter(p => 
-                              p.winning_team_id === selectedSquadTeamId && 
-                              p.status === "Sold" && 
-                              p.role === role
-                            )
-                            if (rolePlayers.length === 0) return null
-                            return (
-                              <div key={role} className="space-y-3">
-                                <h3 className="text-sm font-bold flex items-center gap-2 text-primary">
-                                  <div className="w-1 h-4 bg-primary rounded-full" />
-                                  {role === "Wicketkeeper" ? "Wicketkeepers" : role === "Allrounder" ? "Allrounders" : `${role}s`}
-                                  <Badge variant="secondary" className="ml-auto text-[10px]">{rolePlayers.length}</Badge>
-                                </h3>
-                                <div className="grid gap-2">
-                                  {rolePlayers.map(p => (
-                                    <div key={p.id} className="flex items-center justify-between p-3 rounded-lg bg-secondary/30 border border-border/50 group hover:border-primary/30 transition-all">
-                                      <div className="flex items-center gap-3 min-w-0">
-                                        <div className="flex flex-col min-w-0">
-                                          <div className="flex items-center gap-2">
-                                            <span className="text-sm font-semibold truncate">{p.name}</span>
-                                            {p.is_captain && <Crown className="h-3.5 w-3.5 text-yellow-500 fill-yellow-500" />}
-                                          </div>
-                                          <span className="text-[10px] text-muted-foreground uppercase tracking-tighter truncate">
-                                            {p.nationality} • {p.team} 
-                                            {p.team === IPL_TEAM_META[selectedTeamData?.team_name || ""]?.short && (
-                                              <span className="ml-1 text-blue-400 font-bold">(Local)</span>
-                                            )}
-                                          </span>
-                                        </div>
-                                      </div>
-                                      <div className="flex items-center gap-3 shrink-0 ml-4">
-                                        <span className="text-sm font-bold text-primary whitespace-nowrap">{p.current_bid} CR</span>
-                                        {selectedSquadTeamId === myTeam.id && !p.is_captain && (
-                                          <Button 
-                                            variant="ghost" 
-                                            size="sm" 
-                                            onClick={() => handleSetCaptain(p.id)}
-                                            className="h-8 px-3 text-[11px] opacity-0 group-hover:opacity-100 bg-primary/10 hover:bg-primary hover:text-primary-foreground transition-all shrink-0"
-                                          >
-                                            Set Captain
-                                          </Button>
-                                        )}
-                                      </div>
-                                    </div>
-                                  ))}
-                                </div>
-                              </div>
-                            )
-                          })}
-                          {(!selectedSquadTeamId || players.filter(p => p.winning_team_id === selectedSquadTeamId && p.status === "Sold").length === 0) && (
-                            <div className="h-40 flex flex-col items-center justify-center text-muted-foreground gap-2">
-                              <Users className="h-8 w-8 opacity-20" />
-                              <p className="text-sm">No players bought yet</p>
-                            </div>
-                          )}
-                        </div>
-                      </ScrollArea>
-                      {selectedTeamData && (
-                        <div className="p-6 border-t border-border bg-secondary/20 shrink-0">
-                          <div className="flex items-center justify-between text-sm">
-                            <span className="text-muted-foreground">Budget Remaining</span>
-                            <span className="font-bold text-lg text-primary">{selectedTeamData.purse_remaining} CR</span>
-                          </div>
-                        </div>
-                      )}
-                    </TabsContent>
-
-                    <TabsContent value="available" className="flex-1 min-h-0 m-0 flex flex-col">
-                      <div className="p-6 border-b border-border shrink-0 bg-secondary/10">
-                        <Tabs value={squadAvailableCategory} onValueChange={setSquadAvailableCategory} className="w-full">
-                          <TabsList className="grid w-full grid-cols-6 bg-secondary/50 h-10 p-1">
-                            <TabsTrigger value="All" className="text-[10px]">All</TabsTrigger>
-                            <TabsTrigger value="Batter" className="text-[10px]">BAT</TabsTrigger>
-                            <TabsTrigger value="Bowler" className="text-[10px]">BOWL</TabsTrigger>
-                            <TabsTrigger value="Allrounder" className="text-[10px] text-nowrap">AR</TabsTrigger>
-                            <TabsTrigger value="Wicketkeeper" className="text-[10px]">WK</TabsTrigger>
-                            <TabsTrigger value="Unsold" className="text-[10px] text-red-400">UNSOLD</TabsTrigger>
-                          </TabsList>
-                        </Tabs>
-                        <div className="mt-3 flex items-center justify-between text-xs text-muted-foreground">
-                          <span className="font-semibold text-foreground flex items-center gap-1.5">
-                            <Users className="h-3.5 w-3.5 text-primary" />
-                            {squadAvailableCategory === "Unsold" ? "Unsold Pool" : "Remaining Pool"} ({
-                              squadAvailableCategory === "Unsold" 
-                                ? players.filter(p => p.status === "Unsold").length
-                                : squadAvailablePlayers.length
-                            })
-                          </span>
-                        </div>
-                      </div>
-                      <ScrollArea className="flex-1 h-full">
-                        <Table>
-                          <TableHeader className="sticky top-0 bg-background z-10 shadow-sm">
-                            <TableRow className="border-border/50 hover:bg-transparent">
-                              <TableHead className="text-muted-foreground text-xs">Name</TableHead>
-                              <TableHead className="text-muted-foreground text-xs">Role</TableHead>
-                              <TableHead className="text-muted-foreground text-xs text-right">Base</TableHead>
-                            </TableRow>
-                          </TableHeader>
-                          <TableBody>
-                            {(squadAvailableCategory === "Unsold" 
-                              ? players.filter(p => p.status === "Unsold")
-                              : squadAvailablePlayers
-                            ).map((p) => (
-                              <TableRow key={p.id} className="border-border/30 hover:bg-secondary/30">
-                                <TableCell className="py-2">
-                                  <div className="flex flex-col">
-                                    <span className="font-medium text-foreground text-sm">{p.name}</span>
-                                    <span className="text-[10px] text-muted-foreground uppercase">{p.nationality} • {p.team}</span>
-                                  </div>
-                                </TableCell>
-                                <TableCell className="py-2 text-xs text-muted-foreground">
-                                  {p.role}
-                                </TableCell>
-                                <TableCell className="py-2 text-right text-sm font-medium text-primary">
-                                  {p.base_price} CR
-                                </TableCell>
-                              </TableRow>
-                            ))}
-                            {(squadAvailableCategory === "Unsold" 
-                              ? players.filter(p => p.status === "Unsold").length
-                              : squadAvailablePlayers.length
-                            ) === 0 && (
-                              <TableRow>
-                                <TableCell colSpan={3} className="h-40 text-center text-muted-foreground">
-                                  No players found in this category.
-                                </TableCell>
-                              </TableRow>
-                            )}
-                          </TableBody>
-                        </Table>
-                      </ScrollArea>
-                    </TabsContent>
-                  </Tabs>
-                </SheetContent>
-              </Sheet>
-            )}
-            {myTeam && (
-              <div className="flex items-center gap-2 ml-2 border-l border-border pl-4">
+              <div className="flex items-center gap-2 border-l border-border pl-4">
                 <div 
                   className="w-8 h-8 rounded-full flex items-center justify-center font-bold text-xs"
                   style={{ 
@@ -914,184 +696,454 @@ export default function LiveDashboard() {
               </div>
             )}
 
-            {/* Admin Panel Trigger */}
-            {isAdmin && (
-              <Sheet>
-                <SheetTrigger asChild>
-                  <Button 
-                    variant="outline" 
-                    size="sm" 
-                    className="gap-2 border-primary/30 hover:border-primary hover:bg-primary/10 text-foreground"
-                  >
-                    <Settings2 className="h-4 w-4" />
-                    <span className="hidden md:inline">Manage</span>
-                  </Button>
-                </SheetTrigger>
-                <SheetContent className="w-full sm:max-w-[600px] md:max-w-[700px] bg-card border-l border-border">
-                  <SheetHeader className="pb-4">
-                    <SheetTitle className="flex items-center gap-2 text-xl text-foreground">
-                      <Gavel className="h-5 w-5 text-primary" />
-                      Auctioneer Control Panel
-                    </SheetTitle>
-                    <SheetDescription className="text-muted-foreground">
-                      Manage players and control the auction flow
-                    </SheetDescription>
-                  </SheetHeader>
-
-                  <div className="flex flex-col h-[calc(100vh-140px)]">
-                    {/* Search & Category Filter */}
-                    <div className="space-y-4 mb-4">
-                      <div className="relative">
-                        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                        <Input
-                          placeholder="Search by name or role..."
-                          value={playerSearch}
-                          onChange={(e) => setPlayerSearch(e.target.value)}
-                          className="pl-10 bg-input border-border focus:border-primary"
-                        />
+            <div className="flex items-center gap-2">
+              {myTeam && (
+                <Sheet>
+                  <SheetTrigger asChild>
+                    <Button variant="outline" size="sm" className="gap-2 border-primary/30 hover:border-primary">
+                      <Users className="h-4 w-4 text-primary" />
+                      <span className="hidden md:inline">View Squads</span>
+                    </Button>
+                  </SheetTrigger>
+                  <SheetContent side="left" className="w-full sm:max-w-[540px] md:max-w-[650px] bg-card border-r border-border flex flex-col p-0">
+                    <Tabs defaultValue="squad" className="flex-1 flex flex-col min-h-0">
+                      <div className="p-6 border-b border-border shrink-0">
+                        <SheetHeader>
+                          <SheetTitle className="flex items-center justify-between">
+                            <div className="flex items-center gap-2">
+                              <Trophy className="h-5 w-5 text-accent" />
+                              Strategy Hub
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <TabsList className="bg-secondary/50">
+                                <TabsTrigger value="squad" className="text-xs">My Squad</TabsTrigger>
+                                <TabsTrigger value="available" className="text-xs text-nowrap">Available Pool</TabsTrigger>
+                              </TabsList>
+                              <Button 
+                                variant="ghost" 
+                                size="sm" 
+                                onClick={() => handleExportCSV(selectedSquadTeamId)}
+                                className="text-xs h-8 gap-1.5 hover:bg-accent/10 hover:text-accent"
+                              >
+                                <Download className="h-3.5 w-3.5" />
+                                Export
+                              </Button>
+                            </div>
+                          </SheetTitle>
+                        </SheetHeader>
                       </div>
 
-                        <Tabs value={activeCategory} onValueChange={setActiveCategory} className="w-full">
-                          <TabsList className="grid w-full grid-cols-5 bg-secondary/50 h-10 p-1">
-                            <TabsTrigger value="All" className="text-xs">All</TabsTrigger>
-                            <TabsTrigger value="Batter" className="text-xs">BAT</TabsTrigger>
-                            <TabsTrigger value="Bowler" className="text-xs">BOWL</TabsTrigger>
-                            <TabsTrigger value="Allrounder" className="text-xs">AR</TabsTrigger>
-                            <TabsTrigger value="Wicketkeeper" className="text-xs">WK</TabsTrigger>
-                          </TabsList>
-                        </Tabs>
-                    </div>
+                      <TabsContent value="squad" className="flex-1 min-h-0 m-0 flex flex-col">
+                        <div className="p-6 border-b border-border shrink-0 space-y-4">
+                          <div className="flex flex-col gap-1.5">
+                            <label className="text-[10px] uppercase font-bold text-muted-foreground tracking-wider">Select Team</label>
+                            <select 
+                              value={selectedSquadTeamId || ""}
+                              onChange={(e) => setSelectedSquadTeamId(e.target.value)}
+                              className="w-full h-10 bg-secondary/50 border border-border rounded-md px-3 text-sm focus:ring-1 focus:ring-primary outline-none"
+                            >
+                              {teams.filter(t => !!t.manager_name).map(t => (
+                                <option key={t.id} value={t.id}>
+                                  {t.team_name} {t.id === myTeam.id ? "(My Team)" : ""}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
 
-                    {/* Unsold Players Table */}
-                    <div className="flex-1 min-h-0 overflow-hidden rounded-lg border border-border/50 bg-background/50 flex flex-col">
-                      <div className="p-3 border-b border-border/50 bg-secondary/30 flex items-center justify-between shrink-0">
-                        <h4 className="text-sm font-semibold text-foreground flex items-center gap-2">
-                          <Users className="h-4 w-4 text-muted-foreground" />
-                          {activeCategory === "All" ? "All Unsold" : `${activeCategory}s`} ({filteredPlayers.length})
-                        </h4>
-                        {playerSearch && (
-                          <Badge variant="secondary" className="text-[10px] font-normal">
-                            Filtered
-                          </Badge>
-                        )}
-                      </div>
-                      <ScrollArea className="flex-1 h-full">
-                        <Table>
-                          <TableHeader className="sticky top-0 bg-background z-10 shadow-sm">
-                            <TableRow className="border-border/50 hover:bg-transparent">
-                              <TableHead className="text-muted-foreground text-xs">Name</TableHead>
-                              <TableHead className="text-muted-foreground text-xs hidden xs:table-cell">Role</TableHead>
-                              <TableHead className="text-muted-foreground text-xs text-right">Base</TableHead>
-                              <TableHead className="text-muted-foreground text-xs text-right">Action</TableHead>
-                            </TableRow>
-                          </TableHeader>
-                          <TableBody>
-                            {filteredPlayers.length > 0 ? (
-                              filteredPlayers.map((player) => (
-                                <TableRow 
-                                  key={player.id}
-                                  className="border-border/30 hover:bg-secondary/30"
-                                >
-                                  <TableCell className="py-2">
-                                    <div className="flex flex-col">
-                                        <div className="flex items-center gap-2">
-                                          <span className="font-medium text-foreground text-sm truncate max-w-[120px] sm:max-w-none">
-                                            {player.name}
-                                          </span>
-                                          {player.status === "Pending" && (
-                                            <Badge variant="outline" className="text-[9px] h-4 px-1 border-orange-500/50 text-orange-500">
-                                              Pending
-                                            </Badge>
+                          {selectedTeamData && auctionRules && (
+                            <div className="space-y-2">
+                              <div className="grid grid-cols-3 gap-2">
+                                {(() => {
+                                  const squad = players.filter(p => p.winning_team_id === selectedTeamData.id && p.status === "Sold")
+                                  const overseas = squad.filter(p => p.nationality !== "IND").length
+                                  const localCount = squad.filter(p => p.team === IPL_TEAM_META[selectedTeamData.team_name]?.short).length
+                                  const isOverseasValid = overseas <= (auctionRules.maxOverseas || 8)
+                                  const isSquadValid = squad.length >= (auctionRules.minSquad || 15)
+
+                                  return (
+                                    <>
+                                      <div className={`p-2 rounded-lg border flex flex-col gap-0.5 ${overseas > 0 ? (isOverseasValid ? "bg-green-500/10 border-green-500/20" : "bg-red-500/10 border-red-500/20") : "bg-secondary/30 border-border/50"}`}>
+                                        <span className="text-[9px] font-bold text-muted-foreground uppercase">Overseas</span>
+                                        <div className="flex items-baseline gap-1">
+                                          <span className={`text-lg font-bold ${overseas > 0 && isOverseasValid ? "text-green-500" : ""}`}>{overseas}</span>
+                                          <span className="text-[10px] text-muted-foreground">/{auctionRules.maxOverseas}</span>
+                                        </div>
+                                      </div>
+                                      <div className={`p-2 rounded-lg border flex flex-col gap-0.5 ${localCount > 0 ? "bg-blue-500/10 border-blue-500/20" : "bg-secondary/30 border-border/50"}`}>
+                                        <span className="text-[9px] font-bold text-muted-foreground uppercase">Local</span>
+                                        <div className="flex items-baseline gap-1">
+                                          <span className={`text-lg font-bold ${localCount > 0 ? "text-blue-400" : ""}`}>{localCount}</span>
+                                          <span className="text-[10px] text-muted-foreground">Original</span>
+                                        </div>
+                                      </div>
+                                      <div className={`p-2 rounded-lg border flex flex-col gap-0.5 ${squad.length > 0 ? (isSquadValid ? "bg-green-500/10 border-green-500/20" : "bg-yellow-500/10 border-yellow-500/20") : "bg-secondary/30 border-border/50"}`}>
+                                        <span className="text-[9px] font-bold text-muted-foreground uppercase">Squad</span>
+                                        <div className="flex items-baseline gap-1">
+                                          <span className={`text-lg font-bold ${isSquadValid ? "text-green-500" : ""}`}>{squad.length}</span>
+                                          <span className="text-[10px] text-muted-foreground">/{auctionRules.maxSquad}</span>
+                                        </div>
+                                      </div>
+                                    </>
+                                  )
+                                })()}
+                              </div>
+                              <div className="grid grid-cols-3 gap-2">
+                                {(() => {
+                                  const squad = players.filter(p => p.winning_team_id === selectedTeamData.id && p.status === "Sold")
+                                  const batters = squad.filter(p => p.role === "Batter").length
+                                  const bowlers = squad.filter(p => p.role === "Bowler").length
+                                  const keepers = squad.filter(p => p.role === "Wicketkeeper").length
+                                  return (
+                                    <>
+                                      <div className="p-2 rounded-lg border bg-secondary/30 border-border/50 flex flex-col gap-0.5">
+                                        <span className="text-[9px] font-bold text-muted-foreground uppercase">Keepers</span>
+                                        <div className="flex items-baseline gap-1">
+                                          <span className={`text-lg font-bold ${keepers > 0 ? "text-primary" : "text-muted-foreground"}`}>{keepers}</span>
+                                          <span className="text-[10px] text-muted-foreground">WK</span>
+                                        </div>
+                                      </div>
+                                      <div className="p-2 rounded-lg border bg-secondary/30 border-border/50 flex flex-col gap-0.5">
+                                        <span className="text-[9px] font-bold text-muted-foreground uppercase">Batters</span>
+                                        <div className="flex items-baseline gap-1">
+                                          <span className={`text-lg font-bold ${batters > 0 ? "text-primary" : "text-muted-foreground"}`}>{batters}</span>
+                                          <span className="text-[10px] text-muted-foreground">BAT</span>
+                                        </div>
+                                      </div>
+                                      <div className="p-2 rounded-lg border bg-secondary/30 border-border/50 flex flex-col gap-0.5">
+                                        <span className="text-[9px] font-bold text-muted-foreground uppercase">Bowlers</span>
+                                        <div className="flex items-baseline gap-1">
+                                          <span className={`text-lg font-bold ${bowlers > 0 ? "text-primary" : "text-muted-foreground"}`}>{bowlers}</span>
+                                          <span className="text-[10px] text-muted-foreground">BOWL</span>
+                                        </div>
+                                      </div>
+                                    </>
+                                  )
+                                })()}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                        <ScrollArea className="flex-1 h-full">
+                          <div className="p-6 space-y-6">
+                            {["Batter", "Bowler", "Allrounder", "Wicketkeeper"].map(role => {
+                              const rolePlayers = players.filter(p => 
+                                p.winning_team_id === selectedSquadTeamId && 
+                                p.status === "Sold" && 
+                                p.role === role
+                              )
+                              if (rolePlayers.length === 0) return null
+                              return (
+                                <div key={role} className="space-y-3">
+                                  <h3 className="text-sm font-bold flex items-center gap-2 text-primary">
+                                    <div className="w-1 h-4 bg-primary rounded-full" />
+                                    {role === "Wicketkeeper" ? "Wicketkeepers" : role === "Allrounder" ? "Allrounders" : `${role}s`}
+                                    <Badge variant="secondary" className="ml-auto text-[10px]">{rolePlayers.length}</Badge>
+                                  </h3>
+                                  <div className="grid gap-2">
+                                    {rolePlayers.map(p => (
+                                      <div key={p.id} className="flex items-center justify-between p-3 rounded-lg bg-secondary/30 border border-border/50 group hover:border-primary/30 transition-all">
+                                        <div className="flex items-center gap-3 min-w-0">
+                                          <div className="flex flex-col min-w-0">
+                                            <div className="flex items-center gap-2">
+                                              <span className="text-sm font-semibold truncate">{p.name}</span>
+                                              {p.is_captain && <Crown className="h-3.5 w-3.5 text-yellow-500 fill-yellow-500" />}
+                                            </div>
+                                            <span className="text-[10px] text-muted-foreground uppercase tracking-tighter truncate">
+                                              {p.nationality} • {p.team} 
+                                              {p.team === IPL_TEAM_META[selectedTeamData?.team_name || ""]?.short && (
+                                                <span className="ml-1 text-blue-400 font-bold">(Local)</span>
+                                              )}
+                                            </span>
+                                          </div>
+                                        </div>
+                                        <div className="flex items-center gap-3 shrink-0 ml-4">
+                                          <span className="text-sm font-bold text-primary whitespace-nowrap">{p.current_bid} CR</span>
+                                          {selectedSquadTeamId === myTeam.id && !p.is_captain && (
+                                            <Button 
+                                              variant="ghost" 
+                                              size="sm" 
+                                              onClick={() => handleSetCaptain(p.id)}
+                                              className="h-8 px-3 text-[11px] opacity-0 group-hover:opacity-100 bg-primary/10 hover:bg-primary hover:text-primary-foreground transition-all shrink-0"
+                                            >
+                                              Set Captain
+                                            </Button>
                                           )}
                                         </div>
-                                      <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                                        <span>{player.nationality}</span>
-                                        <span className="w-1 h-1 rounded-full bg-muted-foreground/30" />
-                                        <span className="font-semibold text-accent/80">{player.team}</span>
                                       </div>
+                                    ))}
+                                  </div>
+                                </div>
+                              )
+                            })}
+                            {(!selectedSquadTeamId || players.filter(p => p.winning_team_id === selectedSquadTeamId && p.status === "Sold").length === 0) && (
+                              <div className="h-40 flex flex-col items-center justify-center text-muted-foreground gap-2">
+                                <Users className="h-8 w-8 opacity-20" />
+                                <p className="text-sm">No players bought yet</p>
+                              </div>
+                            )}
+                          </div>
+                        </ScrollArea>
+                        {selectedTeamData && (
+                          <div className="p-6 border-t border-border bg-secondary/20 shrink-0">
+                            <div className="flex items-center justify-between text-sm">
+                              <span className="text-muted-foreground">Budget Remaining</span>
+                              <span className="font-bold text-lg text-primary">{selectedTeamData.purse_remaining} CR</span>
+                            </div>
+                          </div>
+                        )}
+                      </TabsContent>
+
+                      <TabsContent value="available" className="flex-1 min-h-0 m-0 flex flex-col">
+                        <div className="p-6 border-b border-border shrink-0 bg-secondary/10">
+                          <Tabs value={squadAvailableCategory} onValueChange={setSquadAvailableCategory} className="w-full">
+                            <TabsList className="grid w-full grid-cols-6 bg-secondary/50 h-10 p-1">
+                              <TabsTrigger value="All" className="text-[10px]">All</TabsTrigger>
+                              <TabsTrigger value="Batter" className="text-[10px]">BAT</TabsTrigger>
+                              <TabsTrigger value="Bowler" className="text-[10px]">BOWL</TabsTrigger>
+                              <TabsTrigger value="Allrounder" className="text-[10px] text-nowrap">AR</TabsTrigger>
+                              <TabsTrigger value="Wicketkeeper" className="text-[10px]">WK</TabsTrigger>
+                              <TabsTrigger value="Unsold" className="text-[10px] text-red-400">UNSOLD</TabsTrigger>
+                            </TabsList>
+                          </Tabs>
+                          <div className="mt-3 flex items-center justify-between text-xs text-muted-foreground">
+                            <span className="font-semibold text-foreground flex items-center gap-1.5">
+                              <Users className="h-3.5 w-3.5 text-primary" />
+                              {squadAvailableCategory === "Unsold" ? "Unsold Pool" : "Remaining Pool"} ({
+                                squadAvailableCategory === "Unsold" 
+                                  ? players.filter(p => p.status === "Unsold").length
+                                  : squadAvailablePlayers.length
+                              })
+                            </span>
+                          </div>
+                        </div>
+                        <ScrollArea className="flex-1 h-full">
+                          <Table>
+                            <TableHeader className="sticky top-0 bg-background z-10 shadow-sm">
+                              <TableRow className="border-border/50 hover:bg-transparent">
+                                <TableHead className="text-muted-foreground text-xs">Name</TableHead>
+                                <TableHead className="text-muted-foreground text-xs">Role</TableHead>
+                                <TableHead className="text-muted-foreground text-xs text-right">Base</TableHead>
+                              </TableRow>
+                            </TableHeader>
+                            <TableBody>
+                              {(squadAvailableCategory === "Unsold" 
+                                ? players.filter(p => p.status === "Unsold")
+                                : squadAvailablePlayers
+                              ).map((p) => (
+                                <TableRow key={p.id} className="border-border/30 hover:bg-secondary/30">
+                                  <TableCell className="py-2">
+                                    <div className="flex flex-col">
+                                      <span className="font-medium text-foreground text-sm">{p.name}</span>
+                                      <span className="text-[10px] text-muted-foreground uppercase">{p.nationality} • {p.team}</span>
                                     </div>
                                   </TableCell>
-                                  <TableCell className="py-2 text-sm text-muted-foreground hidden xs:table-cell">
-                                    {player.role}
+                                  <TableCell className="py-2 text-xs text-muted-foreground">
+                                    {p.role}
                                   </TableCell>
-                                  <TableCell className="py-2 text-right text-sm font-medium text-primary whitespace-nowrap">
-                                    {player.base_price} CR
-                                  </TableCell>
-                                  <TableCell className="py-2 text-right">
-                                    <Button
-                                      size="sm"
-                                      onClick={() => handleBringToHammer(player)}
-                                      className="h-8 px-3 text-xs font-semibold bg-accent hover:bg-accent/90 text-accent-foreground shadow-sm shadow-accent/20"
-                                    >
-                                      <Play className="h-3 w-3 mr-1.5" />
-                                      Bring to Hammer
-                                    </Button>
+                                  <TableCell className="py-2 text-right text-sm font-medium text-primary">
+                                    {p.base_price} CR
                                   </TableCell>
                                 </TableRow>
-                              ))
-                            ) : (
-                              <TableRow>
-                                <TableCell colSpan={4} className="h-32 text-center text-muted-foreground">
-                                  No {activeCategory.toLowerCase()}s found.
-                                </TableCell>
+                              ))}
+                              {(squadAvailableCategory === "Unsold" 
+                                ? players.filter(p => p.status === "Unsold").length
+                                : squadAvailablePlayers.length
+                              ) === 0 && (
+                                <TableRow>
+                                  <TableCell colSpan={3} className="h-40 text-center text-muted-foreground">
+                                    No players found in this category.
+                                  </TableCell>
+                                </TableRow>
+                              )}
+                            </TableBody>
+                          </Table>
+                        </ScrollArea>
+                      </TabsContent>
+                    </Tabs>
+                  </SheetContent>
+                </Sheet>
+              )}
+
+              {/* Admin Panel Trigger */}
+              {isAdmin && (
+                <Sheet>
+                  <SheetTrigger asChild>
+                    <Button 
+                      variant="outline" 
+                      size="sm" 
+                      className="gap-2 border-primary/30 hover:border-primary hover:bg-primary/10 text-foreground"
+                    >
+                      <Settings2 className="h-4 w-4" />
+                      <span className="hidden md:inline">Manage</span>
+                    </Button>
+                  </SheetTrigger>
+                  <SheetContent className="w-full sm:max-w-[600px] md:max-w-[700px] bg-card border-l border-border">
+                    <SheetHeader className="pb-4">
+                      <SheetTitle className="flex items-center gap-2 text-xl text-foreground">
+                        <Gavel className="h-5 w-5 text-primary" />
+                        Auctioneer Control Panel
+                      </SheetTitle>
+                      <SheetDescription className="text-muted-foreground">
+                        Manage players and control the auction flow
+                      </SheetDescription>
+                    </SheetHeader>
+
+                    <div className="flex flex-col h-[calc(100vh-140px)]">
+                      {/* Search & Category Filter */}
+                      <div className="space-y-4 mb-4">
+                        <div className="relative">
+                          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                          <Input
+                            placeholder="Search by name or role..."
+                            value={playerSearch}
+                            onChange={(e) => setPlayerSearch(e.target.value)}
+                            className="pl-10 bg-input border-border focus:border-primary"
+                          />
+                        </div>
+
+                          <Tabs value={activeCategory} onValueChange={setActiveCategory} className="w-full">
+                            <TabsList className="grid w-full grid-cols-5 bg-secondary/50 h-10 p-1">
+                              <TabsTrigger value="All" className="text-xs">All</TabsTrigger>
+                              <TabsTrigger value="Batter" className="text-xs">BAT</TabsTrigger>
+                              <TabsTrigger value="Bowler" className="text-xs">BOWL</TabsTrigger>
+                              <TabsTrigger value="Allrounder" className="text-xs">AR</TabsTrigger>
+                              <TabsTrigger value="Wicketkeeper" className="text-xs">WK</TabsTrigger>
+                            </TabsList>
+                          </Tabs>
+                      </div>
+
+                      {/* Unsold Players Table */}
+                      <div className="flex-1 min-h-0 overflow-hidden rounded-lg border border-border/50 bg-background/50 flex flex-col">
+                        <div className="p-3 border-b border-border/50 bg-secondary/30 flex items-center justify-between shrink-0">
+                          <h4 className="text-sm font-semibold text-foreground flex items-center gap-2">
+                            <Users className="h-4 w-4 text-muted-foreground" />
+                            {activeCategory === "All" ? "All Unsold" : `${activeCategory}s`} ({filteredPlayers.length})
+                          </h4>
+                          {playerSearch && (
+                            <Badge variant="secondary" className="text-[10px] font-normal">
+                              Filtered
+                            </Badge>
+                          )}
+                        </div>
+                        <ScrollArea className="flex-1 h-full">
+                          <Table>
+                            <TableHeader className="sticky top-0 bg-background z-10 shadow-sm">
+                              <TableRow className="border-border/50 hover:bg-transparent">
+                                <TableHead className="text-muted-foreground text-xs">Name</TableHead>
+                                <TableHead className="text-muted-foreground text-xs hidden xs:table-cell">Role</TableHead>
+                                <TableHead className="text-muted-foreground text-xs text-right">Base</TableHead>
+                                <TableHead className="text-muted-foreground text-xs text-right">Action</TableHead>
                               </TableRow>
-                            )}
-                          </TableBody>
-                        </Table>
-                      </ScrollArea>
-                    </div>
+                            </TableHeader>
+                            <TableBody>
+                              {filteredPlayers.length > 0 ? (
+                                filteredPlayers.map((player) => (
+                                  <TableRow 
+                                    key={player.id}
+                                    className="border-border/30 hover:bg-secondary/30"
+                                  >
+                                    <TableCell className="py-2">
+                                      <div className="flex flex-col">
+                                          <div className="flex items-center gap-2">
+                                            <span className="font-medium text-foreground text-sm truncate max-w-[120px] sm:max-w-none">
+                                              {player.name}
+                                            </span>
+                                            {player.status === "Pending" && (
+                                              <Badge variant="outline" className="text-[9px] h-4 px-1 border-orange-500/50 text-orange-500">
+                                                Pending
+                                              </Badge>
+                                            )}
+                                          </div>
+                                        <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                                          <span>{player.nationality}</span>
+                                          <span className="w-1 h-1 rounded-full bg-muted-foreground/30" />
+                                          <span className="font-semibold text-accent/80">{player.team}</span>
+                                        </div>
+                                      </div>
+                                    </TableCell>
+                                    <TableCell className="py-2 text-sm text-muted-foreground hidden xs:table-cell">
+                                      {player.role}
+                                    </TableCell>
+                                    <TableCell className="py-2 text-right text-sm font-medium text-primary whitespace-nowrap">
+                                      {player.base_price} CR
+                                    </TableCell>
+                                    <TableCell className="py-2 text-right">
+                                      <Button
+                                        size="sm"
+                                        disabled={auctionStatus === "Completed"}
+                                        onClick={() => handleBringToHammer(player)}
+                                        className="h-8 px-3 text-xs font-semibold bg-accent hover:bg-accent/90 text-accent-foreground shadow-sm shadow-accent/20"
+                                      >
+                                        <Play className="h-3 w-3 mr-1.5" />
+                                        Bring to Hammer
+                                      </Button>
+                                    </TableCell>
+                                  </TableRow>
+                                ))
+                              ) : (
+                                <TableRow>
+                                  <TableCell colSpan={4} className="h-32 text-center text-muted-foreground">
+                                    No {activeCategory.toLowerCase()}s found.
+                                  </TableCell>
+                                </TableRow>
+                              )}
+                            </TableBody>
+                          </Table>
+                        </ScrollArea>
+                      </div>
 
-                    {/* Control Buttons */}
-                    <div className="mt-4 pt-4 border-t border-border/50 space-y-3">
-                      <Button
-                        variant="destructive"
-                        onClick={handleForceSell}
-                        disabled={auctionStatus === "Completed"}
-                        className="w-full h-12 font-bold text-base gap-2 bg-destructive hover:bg-destructive/90 shadow-lg shadow-destructive/25"
-                      >
-                        <AlertTriangle className="h-5 w-5" />
-                        Force Sell / End Bid
-                      </Button>
+                      {/* Control Buttons */}
+                      <div className="mt-4 pt-4 border-t border-border/50 space-y-3">
+                        <Button
+                          variant="destructive"
+                          onClick={handleForceSell}
+                          disabled={auctionStatus === "Completed"}
+                          className="w-full h-12 font-bold text-base gap-2 bg-destructive hover:bg-destructive/90 shadow-lg shadow-destructive/25"
+                        >
+                          <AlertTriangle className="h-5 w-5" />
+                          Force Sell / End Bid
+                        </Button>
 
-                      <Button
-                        variant="outline"
-                        onClick={handleResetUnsold}
-                        disabled={auctionStatus === "Completed"}
-                        className="w-full h-12 font-bold text-base gap-2 border-orange-500/50 hover:bg-orange-500/10 text-orange-500 shadow-lg shadow-orange-900/10"
-                      >
-                        <Zap className="h-5 w-5" />
-                        Reset Unsold Players (Accelerated Round)
-                      </Button>
-                      {auctionStatus !== "Completed" ? (
                         <Button
                           variant="outline"
-                          onClick={handleEndAuction}
-                          className="w-full h-12 font-bold text-base gap-2 border-red-500/50 hover:bg-red-500/10 text-red-500"
+                          onClick={handleResetUnsold}
+                          disabled={auctionStatus === "Completed"}
+                          className="w-full h-12 font-bold text-base gap-2 border-orange-500/50 hover:bg-orange-500/10 text-orange-500 shadow-lg shadow-orange-900/10"
                         >
-                          <Power className="h-5 w-5" />
-                          End Full Auction
+                          <Zap className="h-5 w-5" />
+                          Reset Unsold Players (Accelerated Round)
                         </Button>
-                      ) : (
-                        <Button
-                          variant="default"
-                          onClick={handleExportCSV}
-                          className="w-full h-12 font-bold text-base gap-2 bg-green-600 hover:bg-green-700 text-white shadow-lg shadow-green-900/20"
-                        >
-                          <Download className="h-5 w-5" />
-                          Download Final Results (CSV)
-                        </Button>
-                      )}
-                      
-                      <p className="text-xs text-muted-foreground text-center">
-                        {auctionStatus === "Completed" 
-                          ? "Auction is closed. You can now export the data."
-                          : "Manage current player and overall auction status."}
-                      </p>
+                        {auctionStatus !== "Completed" ? (
+                          <Button
+                            variant="outline"
+                            onClick={handleEndAuction}
+                            className="w-full h-12 font-bold text-base gap-2 border-red-500/50 hover:bg-red-500/10 text-red-500"
+                          >
+                            <Power className="h-5 w-5" />
+                            End Full Auction
+                          </Button>
+                        ) : (
+                          <Button
+                            variant="default"
+                            onClick={handleExportCSV}
+                            className="w-full h-12 font-bold text-base gap-2 bg-green-600 hover:bg-green-700 text-white shadow-lg shadow-green-900/20"
+                          >
+                            <Download className="h-5 w-5" />
+                            Download Final Results (CSV)
+                          </Button>
+                        )}
+                        
+                        <p className="text-xs text-muted-foreground text-center">
+                          {auctionStatus === "Completed" 
+                            ? "Auction is closed. You can now export the data."
+                            : "Manage current player and overall auction status."}
+                        </p>
+                      </div>
                     </div>
-                  </div>
-                </SheetContent>
-              </Sheet>
-            )}
+                  </SheetContent>
+                </Sheet>
+              )}
+            </div>
           </div>
         </div>
       </nav>
@@ -1258,9 +1310,17 @@ export default function LiveDashboard() {
             <CardContent className="p-3 md:p-4">
               <div className="grid grid-cols-3 sm:flex sm:flex-wrap items-center gap-2 md:gap-3">
                 <Button 
+                  onClick={handleBidBase}
+                  variant="default"
+                  disabled={auctionStatus === "Completed" || !activePlayer || (activePlayer.current_bid !== null && activePlayer.current_bid > 0) || activePlayer?.winning_team_id === myTeam?.id}
+                  className="h-10 md:h-12 font-bold text-base md:text-lg bg-primary hover:bg-primary/90 text-primary-foreground border border-primary transition-colors disabled:opacity-50 col-span-3 sm:col-auto"
+                >
+                   {activePlayer && activePlayer.current_bid > 0 ? "Bid Placed" : `Bid Base (${activePlayer?.base_price || 0} CR)`}
+                </Button>
+                <Button 
                   onClick={() => handleQuickBid("+20L")}
                   variant="secondary"
-                  disabled={activePlayer?.winning_team_id === myTeam?.id}
+                  disabled={auctionStatus === "Completed" || activePlayer?.winning_team_id === myTeam?.id}
                   className="h-10 md:h-12 font-bold text-base md:text-lg bg-secondary hover:bg-secondary/80 border border-primary/30 hover:border-primary transition-colors disabled:opacity-50"
                 >
                   {activePlayer?.winning_team_id === myTeam?.id ? "Winning..." : "+20L"}
@@ -1268,7 +1328,7 @@ export default function LiveDashboard() {
                 <Button 
                   onClick={() => handleQuickBid("+50L")}
                   variant="secondary"
-                  disabled={activePlayer?.winning_team_id === myTeam?.id}
+                  disabled={auctionStatus === "Completed" || activePlayer?.winning_team_id === myTeam?.id}
                   className="h-10 md:h-12 font-bold text-base md:text-lg bg-secondary hover:bg-secondary/80 border border-primary/30 hover:border-primary transition-colors disabled:opacity-50"
                 >
                   {activePlayer?.winning_team_id === myTeam?.id ? "Winning..." : "+50L"}
@@ -1276,7 +1336,7 @@ export default function LiveDashboard() {
                 <Button 
                   onClick={() => handleQuickBid("+1CR")}
                   variant="secondary"
-                  disabled={activePlayer?.winning_team_id === myTeam?.id}
+                  disabled={auctionStatus === "Completed" || activePlayer?.winning_team_id === myTeam?.id}
                   className="h-10 md:h-12 font-bold text-base md:text-lg bg-secondary hover:bg-secondary/80 border border-accent/30 hover:border-accent transition-colors disabled:opacity-50"
                 >
                   {activePlayer?.winning_team_id === myTeam?.id ? "Winning..." : "+1CR"}
@@ -1284,15 +1344,16 @@ export default function LiveDashboard() {
                 <div className="col-span-3 flex items-center gap-2 flex-1 min-w-0 mt-2 sm:mt-0">
                   <Input
                     type="number"
+                    min="0"
                     placeholder="Custom"
                     value={bidInput}
                     onChange={(e) => setBidInput(e.target.value)}
-                    disabled={activePlayer?.winning_team_id === myTeam?.id}
+                    disabled={auctionStatus === "Completed" || activePlayer?.winning_team_id === myTeam?.id}
                     className="h-10 md:h-12 bg-input border-border focus:border-primary disabled:opacity-50"
                   />
                   <Button 
                     onClick={handleSubmitBid}
-                    disabled={activePlayer?.winning_team_id === myTeam?.id}
+                    disabled={auctionStatus === "Completed" || activePlayer?.winning_team_id === myTeam?.id}
                     className="h-10 md:h-12 px-4 md:px-6 bg-primary hover:bg-primary/90 text-primary-foreground font-bold shadow-lg shadow-primary/25 disabled:bg-primary/50 whitespace-nowrap"
                   >
                     <Gavel className="h-4 w-4 md:h-5 md:w-5 mr-2" />
@@ -1306,70 +1367,74 @@ export default function LiveDashboard() {
         </div>
 
         {/* Right Column - Social & Logs */}
-        <div className="lg:w-80 shrink-0 flex flex-col gap-4">
+        <div className="lg:w-80 shrink-0 flex flex-col gap-4 min-h-0">
           {/* Bid History */}
-          <Card className="flex-1 border-border/50 bg-card/80 flex flex-col overflow-hidden min-h-[150px]">
+          <Card className="flex-1 border-border/50 bg-card/80 flex flex-col min-h-0 overflow-hidden">
             <CardHeader className="pb-2 shrink-0">
               <CardTitle className="flex items-center gap-2 text-lg">
                 <Gavel className="h-5 w-5 text-primary" />
                 Bid History
               </CardTitle>
             </CardHeader>
-            <CardContent className="p-0 flex-1 overflow-hidden">
-              <ScrollArea className="h-full">
-                <div className="p-4 space-y-2">
-                  {bidHistory.map((bid) => {
-                    const team = teams.find(t => t.id === bid.team_id)
-                    const teamMeta = team ? IPL_TEAM_META[team.team_name] : null
-                    return (
-                      <div 
-                        key={bid.id}
-                        className="flex items-center gap-2 text-sm"
+            <CardContent className="p-0 flex-1 min-h-0 overflow-hidden">
+              <div className="h-full overflow-y-auto p-4 space-y-2">
+                {bidHistory
+                  .filter(bid => activePlayer && bid.player_id === activePlayer.id)
+                  .map((bid) => {
+                  const team = teams.find(t => t.id === bid.team_id)
+                  const teamMeta = team ? IPL_TEAM_META[team.team_name] : null
+                  return (
+                    <div 
+                      key={bid.id}
+                      className="flex items-center gap-2 text-sm"
+                    >
+                      <span className="text-muted-foreground font-mono text-[10px]">
+                        [{new Date(bid.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}]
+                      </span>
+                      <span 
+                        className="font-bold"
+                        style={{ color: teamMeta?.color || "var(--primary)" }}
                       >
-                        <span className="text-muted-foreground font-mono text-[10px]">
-                          [{new Date(bid.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}]
-                        </span>
-                        <span className="font-semibold text-primary">{teamMeta?.short || "???"}</span>
-                        <span className="text-muted-foreground">bid</span>
-                        <span className="font-bold text-foreground">{bid.amount} CR</span>
-                      </div>
-                    )
-                  })}
-                  {bidHistory.length === 0 && (
-                    <p className="text-center text-muted-foreground text-sm py-4">No bids yet</p>
-                  )}
-                </div>
-              </ScrollArea>
+                        {teamMeta?.short || "???"}
+                      </span>
+                      <span className="text-muted-foreground">bid</span>
+                      <span className="font-bold text-foreground">{bid.amount} CR</span>
+                    </div>
+                  )
+                })}
+                {(bidHistory.length === 0 || !activePlayer || !bidHistory.some(b => b.player_id === activePlayer.id)) && (
+                  <p className="text-center text-muted-foreground text-sm py-4">No bids for this player yet</p>
+                )}
+              </div>
             </CardContent>
           </Card>
 
           {/* Live Chat */}
-          <Card className="flex-1 border-border/50 bg-card/80 flex flex-col overflow-hidden min-h-[250px]">
+          <Card className="flex-1 border-border/50 bg-card/80 flex flex-col min-h-0 overflow-hidden">
             <CardHeader className="pb-2 shrink-0">
               <CardTitle className="flex items-center gap-2 text-lg">
                 <Users className="h-5 w-5 text-accent" />
                 Live Chat
               </CardTitle>
             </CardHeader>
-            <CardContent className="p-0 flex-1 flex flex-col overflow-hidden">
-              <ScrollArea className="flex-1">
-                <div className="p-4 space-y-3">
-                  {chatMessages.map((msg) => (
-                    <div key={msg.id} className="flex flex-col gap-1">
-                      <div className="flex items-baseline gap-2">
-                        <span className="text-xs font-semibold text-accent">{msg.team_name}</span>
-                        <span className="text-[10px] text-muted-foreground">
-                          {new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                        </span>
-                      </div>
-                      <p className="text-sm text-foreground bg-secondary/30 rounded-lg px-3 py-2">
-                        {msg.message}
-                      </p>
+            <CardContent className="p-0 flex-1 flex flex-col min-h-0 overflow-hidden">
+              <div className="flex-1 overflow-y-auto p-4 space-y-3">
+                {chatMessages.map((msg) => (
+                  <div key={msg.id} className="flex flex-col gap-1">
+                    <div className="flex items-baseline gap-2">
+                      <span className="text-xs font-semibold text-accent">{msg.team_name}</span>
+                      <span className="text-[10px] text-muted-foreground">
+                        {new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                      </span>
                     </div>
-                  ))}
-                </div>
-              </ScrollArea>
-              <div className="p-3 border-t border-border/50 shrink-0">
+                    <p className="text-sm text-foreground bg-secondary/30 rounded-lg px-3 py-2">
+                      {msg.message}
+                    </p>
+                  </div>
+                ))}
+                <div ref={chatEndRef} />
+              </div>
+              <div className="p-3 border-t border-border/50 shrink-0 bg-card">
                 <div className="flex gap-2">
                   <Input
                     placeholder="Type a message..."
