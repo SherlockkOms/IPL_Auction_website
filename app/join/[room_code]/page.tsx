@@ -48,6 +48,7 @@ export default function LobbyPage() {
   const room_code = params.room_code as string
   
   const [auctionId, setAuctionId] = useState<string | null>(null)
+  const [auctionStatus, setAuctionStatus] = useState<string>("Pending")
   const [dbTeams, setDbTeams] = useState<Team[]>([])
   const [myTeamId, setMyTeamId] = useState<string | null>(null)
   const [managerName, setManagerName] = useState("")
@@ -61,33 +62,48 @@ export default function LobbyPage() {
       try {
         const auction = await joinAuction(room_code)
         setAuctionId(auction.id)
+        setAuctionStatus(auction.status)
         
         // Admin Check
         const adminToken = localStorage.getItem(`is_admin_${room_code}`)
-        if (adminToken === "true") {
+        const isAdminUser = adminToken === "true"
+        if (isAdminUser) {
           setIsAdmin(true)
         }
 
-        // Direct Redirect if already active
-        if (auction.status === "Active") {
-          const isAdminStr = adminToken === "true" ? "admin=true" : ""
-          router.push(`/live/${room_code}${isAdminStr ? `?${isAdminStr}` : ""}`)
-          return
-        }
+        // Fetch Teams for this auction first to validate savedTeamId
+        const { data: teamsData } = await supabase
+          .from("teams")
+          .select("*")
+          .eq("auction_id", auction.id)
+        
+        if (teamsData) setDbTeams(teamsData)
 
         // Check if I already claimed a team in this session
-        const savedTeamId = localStorage.getItem(`my_team_id_${room_code}`)
+        let savedTeamId = localStorage.getItem(`my_team_id_${room_code}`)
+        
+        // VALIDATION: Ensure the saved team actually exists in this SPECIFIC auction instance
+        // This prevents issues when reusing room codes across different auctions.
+        const teamInThisAuction = teamsData?.find(t => t.id === savedTeamId)
+        if (!teamInThisAuction) {
+          localStorage.removeItem(`my_team_id_${room_code}`)
+          savedTeamId = null
+        }
+
         if (savedTeamId) {
           setMyTeamId(savedTeamId)
           setIsReady(localStorage.getItem(`is_ready_${room_code}`) === "true")
         }
 
-        const { data: teams } = await supabase
-          .from("teams")
-          .select("*")
-          .eq("auction_id", auction.id)
-        
-        if (teams) setDbTeams(teams)
+        // Direct Redirect if (user is admin OR already has a valid team)
+        if (auction.status === "Active" || auction.status === "Completed") {
+          if (isAdminUser || savedTeamId) {
+            const isAdminStr = isAdminUser ? "admin=true" : ""
+            router.push(`/live/${room_code}${isAdminStr ? `?${isAdminStr}` : ""}`)
+            return
+          }
+          // If they don't have a team, they stay on this page to claim one or spectate.
+        }
       } catch (error) {
         console.error("Init Error:", error)
         alert("Invalid room code")
@@ -115,12 +131,21 @@ export default function LobbyPage() {
         },
         (payload) => {
           console.log("Realtime Payload Received:", payload)
-          const newStatus = payload.new.status?.toLowerCase()
-          if (newStatus === "active" || newStatus === "live") {
-            console.log("Auction is LIVE. Redirecting...")
-            const adminToken = localStorage.getItem(`is_admin_${room_code}`)
-            const isAdminStr = adminToken === "true" ? "admin=true" : ""
-            router.push(`/live/${room_code}${isAdminStr ? `?${isAdminStr}` : ""}`)
+          const newStatus = payload.new.status
+          setAuctionStatus(newStatus)
+          
+          if (newStatus === "Active" || newStatus === "Completed") {
+            console.log("Auction is LIVE. Checking if user should be redirected...")
+            
+            // ONLY auto-teleport if the state confirms they have a role in this auction
+            // This prevents the "instant redirect" for new joiners
+            if (isAdmin || myTeamId) {
+              console.log("User is Admin or has a Team. Teleporting...")
+              const isAdminStr = isAdmin ? "admin=true" : ""
+              router.push(`/live/${room_code}${isAdminStr ? `?${isAdminStr}` : ""}`)
+            } else {
+              console.log("User is a new joiner. Staying in lobby to let them pick.")
+            }
           }
         }
       )
@@ -132,7 +157,7 @@ export default function LobbyPage() {
       console.log("Cleaning up Status Subscription")
       supabase.removeChannel(channel)
     }
-  }, [auctionId, room_code, router])
+  }, [auctionId, room_code, router, isAdmin, myTeamId]) // Added dependencies to keep subscription logic fresh
 
   // 3. Teams Realtime Subscription
   useEffect(() => {
@@ -176,12 +201,21 @@ export default function LobbyPage() {
         localStorage.setItem(`my_team_id_${room_code}`, teamId)
         setSelectedTeamId(null)
         setManagerName("")
+
+        // If the auction is already active, instantly teleport them after claiming!
+        if (auctionStatus === "Active" || auctionStatus === "Completed") {
+          router.push(`/live/${room_code}`)
+        }
       } catch (error) {
         alert("Failed to claim team.")
       }
     } else {
       setSelectedTeamId(teamId)
     }
+  }
+
+  const handleSpectate = () => {
+    router.push(`/live/${room_code}`)
   }
 
   const handleReady = async () => {
@@ -207,8 +241,11 @@ export default function LobbyPage() {
       try {
         console.log("Calling startAuction for ID:", auctionId)
         await startAuction(auctionId)
-        console.log("2. Server Action called successfully")
-        // Subscription will handle redirect for everyone
+        console.log("2. Server Action called successfully. Redirecting Admin...")
+        
+        // Manual redirect for the admin who triggered it
+        const isAdminStr = isAdmin ? "admin=true" : ""
+        router.push(`/live/${room_code}${isAdminStr ? `?${isAdminStr}` : ""}`)
       } catch (error: any) {
         console.error("2. Supabase/Action Error:", error)
         alert(`Failed to start auction: ${error.message}`)
@@ -314,46 +351,57 @@ export default function LobbyPage() {
 
         {/* Action Section */}
         <div className="flex flex-col items-center gap-6">
-          {isAdmin && (
-            <Button
-              onClick={handleStart}
-              disabled={isPending}
-              size="lg"
-              className="h-16 px-16 text-xl font-bold bg-primary hover:bg-primary/90 text-primary-foreground shadow-2xl shadow-primary/40 transition-all duration-300 hover:scale-105"
-            >
-              {isPending ? (
-                <>
-                  <Loader2 className="mr-2 h-6 w-6 animate-spin" />
-                  Teleporting...
-                </>
-              ) : (
-                <>
-                  <Zap className="mr-2 h-6 w-6" />
-                  Start Auction (Teleport All)
-                </>
-              )}
-            </Button>
-          )}
+          <div className="flex flex-wrap justify-center gap-4">
+            {isAdmin && (
+              <Button
+                onClick={handleStart}
+                disabled={isPending}
+                size="lg"
+                className="h-16 px-16 text-xl font-bold bg-primary hover:bg-primary/90 text-primary-foreground shadow-2xl shadow-primary/40 transition-all duration-300 hover:scale-105"
+              >
+                {isPending ? (
+                  <>
+                    <Loader2 className="mr-2 h-6 w-6 animate-spin" />
+                    Teleporting...
+                  </>
+                ) : (
+                  <>
+                    <Zap className="mr-2 h-6 w-6" />
+                    Start Auction (Teleport All)
+                  </>
+                )}
+              </Button>
+            )}
 
-          {!isAdmin && (
-            <div className="flex justify-center">
-              {isReady ? (
-                <div className="flex flex-col items-center gap-4 p-6 rounded-2xl bg-secondary/30 border border-border">
-                  <Loader2 className="h-8 w-8 text-primary animate-spin" />
-                  <p className="text-lg font-medium text-foreground">Waiting for Admin to start the auction...</p>
-                  <p className="text-sm text-muted-foreground">Everyone will be teleported automatically</p>
-                </div>
-              ) : (
-                <Button
-                  onClick={handleReady}
-                  disabled={!myTeamId}
-                  size="lg"
-                  className="h-14 px-12 text-lg font-bold bg-accent hover:bg-accent/90 text-accent-foreground shadow-lg shadow-accent/25 disabled:opacity-50 disabled:shadow-none"
-                >
-                  <Check className="mr-2 h-5 w-5" />
-                  Ready
-                </Button>
-              )}
+            {!isAdmin && !isReady && (
+              <Button
+                onClick={handleReady}
+                disabled={!myTeamId}
+                size="lg"
+                className="h-14 px-12 text-lg font-bold bg-accent hover:bg-accent/90 text-accent-foreground shadow-lg shadow-accent/25 disabled:opacity-50 disabled:shadow-none"
+              >
+                <Check className="mr-2 h-5 w-5" />
+                Ready
+              </Button>
+            )}
+
+            {!isAdmin && (auctionStatus === "Active" || auctionStatus === "Completed") && (
+              <Button
+                onClick={handleSpectate}
+                variant="outline"
+                size="lg"
+                className="h-14 px-12 text-lg font-bold border-primary/50 text-primary hover:bg-primary/10"
+              >
+                Spectate Auction
+              </Button>
+            )}
+          </div>
+
+          {!isAdmin && isReady && (
+            <div className="flex flex-col items-center gap-4 p-6 rounded-2xl bg-secondary/30 border border-border">
+              <Loader2 className="h-8 w-8 text-primary animate-spin" />
+              <p className="text-lg font-medium text-foreground">Waiting for Admin to start the auction...</p>
+              <p className="text-sm text-muted-foreground">Everyone will be teleported automatically</p>
             </div>
           )}
           

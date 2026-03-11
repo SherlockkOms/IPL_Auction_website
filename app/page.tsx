@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useTransition } from "react"
+import { useState, useTransition } from "react"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -22,8 +22,7 @@ import {
 } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { useRouter } from "next/navigation"
-import { createAuction, joinAuction, claimTeam, toggleReady } from "./actions"
-import { supabase } from "@/lib/supabase"
+import { createAuction } from "./actions"
 import { z } from "zod"
 
 const rulesSchema = z.object({
@@ -45,29 +44,7 @@ const rulesSchema = z.object({
 
 type RuleErrors = Partial<Record<keyof typeof rulesSchema._type, string>>
 
-type View = "gateway" | "host-setup" | "host-success" | "join-code" | "join-lobby"
-
-interface Team {
-  id: string
-  auction_id: string
-  team_name: string
-  manager_name: string | null
-  is_ready: boolean
-  purse_remaining: number
-}
-
-const IPL_TEAMS = [
-  { id: "csk", name: "Chennai Super Kings", short: "CSK", color: "#FDB913" },
-  { id: "mi", name: "Mumbai Indians", short: "MI", color: "#004BA0" },
-  { id: "rcb", name: "Royal Challengers", short: "RCB", color: "#EC1C24" },
-  { id: "kkr", name: "Kolkata Knight Riders", short: "KKR", color: "#3A225D" },
-  { id: "dc", name: "Delhi Capitals", short: "DC", color: "#17479E" },
-  { id: "pbks", name: "Punjab Kings", short: "PBKS", color: "#DD1F2D" },
-  { id: "rr", name: "Rajasthan Royals", short: "RR", color: "#EA1A85" },
-  { id: "srh", name: "Sunrisers Hyderabad", short: "SRH", color: "#FF822A" },
-  { id: "gt", name: "Gujarat Titans", short: "GT", color: "#1C1C1C" },
-  { id: "lsg", name: "Lucknow Super Giants", short: "LSG", color: "#A72056" },
-]
+type View = "gateway" | "host-setup" | "host-success" | "join-code"
 
 export default function Gateway() {
   const router = useRouter()
@@ -81,47 +58,11 @@ export default function Gateway() {
     minLocal: 3,
   })
   const [errors, setErrors] = useState<RuleErrors>({})
-  const [roomCode, setRoomCode] = useState("")
   const [generatedRoomCode, setGeneratedRoomCode] = useState("")
   const [copied, setCopied] = useState(false)
   const [joinCode, setJoinCode] = useState("")
-  const [selectedTeamId, setSelectedTeamId] = useState<string | null>(null)
-  const [managerName, setManagerName] = useState("")
-  const [isReady, setIsReady] = useState(false)
   const [csvFile, setCsvFile] = useState<File | null>(null)
   const [isDragging, setIsDragging] = useState(false)
-
-  // DB States
-  const [auctionId, setAuctionId] = useState<string | null>(null)
-  const [dbTeams, setDbTeams] = useState<Team[]>([])
-  const [myTeamId, setMyTeamId] = useState<string | null>(null)
-
-  // Realtime Subscription
-  useEffect(() => {
-    if (!auctionId || view !== "join-lobby") return
-
-    const channel = supabase
-      .channel(`teams-${auctionId}`)
-      .on(
-        "postgres_changes",
-        {
-          event: "*",
-          schema: "public",
-          table: "teams",
-          filter: `auction_id=eq.${auctionId}`,
-        },
-        (payload) => {
-          setDbTeams((current) =>
-            current.map((t) => (t.id === (payload.new as Team).id ? (payload.new as Team) : t))
-          )
-        }
-      )
-      .subscribe()
-
-    return () => {
-      supabase.removeChannel(channel)
-    }
-  }, [auctionId, view])
 
   const handleRuleChange = (key: keyof typeof rules, value: string) => {
     setRules(prev => ({ ...prev, [key]: parseInt(value) || 0 }))
@@ -178,36 +119,6 @@ export default function Gateway() {
     if (joinCode.length >= 6) {
       router.push(`/join/${joinCode.toUpperCase()}`)
     }
-  }
-
-  const handleClaimTeam = async (teamId: string) => {
-    if (managerName.trim() && selectedTeamId === teamId) {
-      try {
-        await claimTeam(teamId, managerName)
-        setMyTeamId(teamId)
-        setSelectedTeamId(null)
-        setManagerName("")
-      } catch (error) {
-        alert("Failed to claim team. It might already be taken.")
-      }
-    } else {
-      setSelectedTeamId(teamId)
-    }
-  }
-
-  const handleReady = async () => {
-    if (myTeamId) {
-      try {
-        await toggleReady(myTeamId, true)
-        setIsReady(true)
-      } catch (error) {
-        alert("Failed to set ready status")
-      }
-    }
-  }
-
-  const handleStartAuction = () => {
-    router.push(`/live/${roomCode}`)
   }
 
   const handleDragOver = (e: React.DragEvent) => {
@@ -630,132 +541,6 @@ export default function Gateway() {
               </div>
             </CardContent>
           </Card>
-        </div>
-      </main>
-    )
-  }
-
-  // Join Lobby View - Franchise Selection
-  if (view === "join-lobby") {
-    const hasClaimedTeam = !!myTeamId
-
-    return (
-      <main className="min-h-screen bg-background py-8 px-4">
-        <div className="max-w-5xl mx-auto">
-          {/* Header */}
-          <div className="text-center mb-8">
-            <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-accent/10 border border-accent/20 mb-4">
-              <Users className="h-4 w-4 text-accent" />
-              <span className="text-sm font-medium text-accent">Room: {roomCode}</span>
-            </div>
-            <h1 className="text-4xl font-bold text-foreground mb-2 text-balance">
-              Choose Your Franchise
-            </h1>
-            <p className="text-muted-foreground text-lg mb-4">
-              Claim a team and get ready for the auction
-            </p>
-          </div>
-
-          {/* Team Grid */}
-          <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-8">
-            {dbTeams.map((team) => {
-              const iplTeam = IPL_TEAMS.find(t => t.name === team.team_name) || IPL_TEAMS[0]
-              const isClaimed = !!team.manager_name
-              const isMine = myTeamId === team.id
-              const isSelecting = selectedTeamId === team.id
-
-              return (
-                <div
-                  key={team.id}
-                  className={`relative rounded-xl border-2 p-4 transition-all duration-300 ${
-                    isMine
-                      ? "border-primary bg-primary/10 shadow-lg shadow-primary/20"
-                      : isClaimed
-                      ? "border-border bg-secondary/30 opacity-60"
-                      : isSelecting
-                      ? "border-accent bg-accent/10 shadow-lg shadow-accent/20"
-                      : "border-border bg-card/50 hover:border-primary/50 hover:bg-card"
-                  }`}
-                >
-                  {/* Team Badge */}
-                  <div
-                    className="w-12 h-12 rounded-full mx-auto mb-3 flex items-center justify-center text-white font-bold text-sm"
-                    style={{ backgroundColor: iplTeam.color }}
-                  >
-                    {iplTeam.short}
-                  </div>
-                  <h3 className="text-sm font-semibold text-foreground text-center mb-2 truncate">
-                    {team.team_name}
-                  </h3>
-
-                  {isClaimed ? (
-                    <div className="text-center">
-                      <div className="flex items-center justify-center gap-1 text-accent text-xs mb-1">
-                        <CheckCircle2 className="h-3 w-3" />
-                        <span>{isMine ? "You" : "Claimed"}</span>
-                      </div>
-                      <p className="text-xs text-muted-foreground truncate">{team.manager_name}</p>
-                      {team.is_ready && (
-                        <Badge className="mt-2 bg-green-500/20 text-green-500 hover:bg-green-500/20 border-none text-[10px]">
-                          READY
-                        </Badge>
-                      )}
-                    </div>
-                  ) : isSelecting ? (
-                    <div className="space-y-2">
-                      <Input
-                        type="text"
-                        placeholder="Your name"
-                        value={managerName}
-                        onChange={(e) => setManagerName(e.target.value)}
-                        className="h-8 text-xs bg-input border-border"
-                        autoFocus
-                      />
-                      <Button
-                        onClick={() => handleClaimTeam(team.id)}
-                        disabled={!managerName.trim() || hasClaimedTeam}
-                        size="sm"
-                        className="w-full h-7 text-xs bg-accent hover:bg-accent/90 text-accent-foreground"
-                      >
-                        Confirm
-                      </Button>
-                    </div>
-                  ) : (
-                    <Button
-                      onClick={() => handleClaimTeam(team.id)}
-                      disabled={hasClaimedTeam}
-                      variant="outline"
-                      size="sm"
-                      className="w-full h-8 text-xs"
-                    >
-                      Claim Team
-                    </Button>
-                  )}
-                </div>
-              )
-            })}
-          </div>
-
-          {/* Ready Section */}
-          <div className="flex justify-center">
-            {isReady ? (
-              <div className="flex flex-col items-center gap-4 p-6 rounded-2xl bg-secondary/30 border border-border">
-                <Loader2 className="h-8 w-8 text-primary animate-spin" />
-                <p className="text-lg font-medium text-foreground">Waiting for Admin to start the auction...</p>
-                <p className="text-sm text-muted-foreground">You&apos;ll be redirected automatically</p>
-              </div>
-            ) : (
-              <Button
-                onClick={handleReady}
-                disabled={!hasClaimedTeam}
-                size="lg"
-                className="h-14 px-12 text-lg font-bold bg-accent hover:bg-accent/90 text-accent-foreground shadow-lg shadow-accent/25 disabled:opacity-50 disabled:shadow-none"
-              >
-                <Check className="mr-2 h-5 w-5" />
-                Ready
-              </Button>
-            )}
-          </div>
         </div>
       </main>
     )

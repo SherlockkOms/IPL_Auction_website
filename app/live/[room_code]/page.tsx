@@ -1228,9 +1228,26 @@ export default function LiveDashboard() {
           <Card className="border-border/50 bg-card/80 shrink-0">
             <CardContent className="p-4 md:p-6">
               <div className="flex flex-col md:flex-row items-center gap-4 md:gap-6">
-                {/* Player Image Placeholder */}
-                <div className="w-24 h-24 md:w-32 md:h-32 lg:w-40 lg:h-40 rounded-xl bg-secondary/50 border-2 border-border flex items-center justify-center shrink-0">
-                  <User className="h-10 w-10 md:h-16 md:w-16 text-muted-foreground" />
+                {/* Player Image Avatar */}
+                <div className="w-24 h-24 md:w-32 md:h-32 lg:w-40 lg:h-40 rounded-xl bg-secondary/50 border-2 border-border flex items-center justify-center shrink-0 overflow-hidden relative">
+                  {activePlayer ? (
+                    <img 
+                      src={
+                        activePlayer.role === "Batter" ? "/bat.jpg" :
+                        activePlayer.role === "Bowler" ? "/bowl.jpg" :
+                        activePlayer.role === "Allrounder" ? "/allrounder.jpg" :
+                        activePlayer.role === "Wicketkeeper" ? "/wicketkeeper.jpg" :
+                        "/placeholder-user.jpg"
+                      } 
+                      alt={activePlayer.role}
+                      className="w-full h-full object-cover"
+                      onError={(e) => {
+                        e.currentTarget.style.display = 'none';
+                        e.currentTarget.nextElementSibling?.classList.remove('hidden');
+                      }}
+                    />
+                  ) : null}
+                  <User className={`h-10 w-10 md:h-16 md:w-16 text-muted-foreground ${activePlayer ? 'hidden' : ''}`} />
                 </div>
                 
                 {/* Player Info */}
