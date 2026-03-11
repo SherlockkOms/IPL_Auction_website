@@ -441,17 +441,17 @@ export default function LiveDashboard() {
         .eq("auction_id", auctionId)
         .eq("status", "Sold")
       
-      if (filterTeamId) {
-        // Ensure we only use the ID string, not the object
-        const idToFilter = typeof filterTeamId === 'object' ? (filterTeamId as any).id : filterTeamId;
-        query = query.eq("winning_team_id", idToFilter)
+      // Only filter if we have a valid string ID (avoids MouseEvent objects)
+      if (filterTeamId && typeof filterTeamId === 'string') {
+        query = query.eq("winning_team_id", filterTeamId)
       }
 
       const { data: soldPlayers, error: playersError } = await query
       
       if (playersError || !soldPlayers) throw new Error("Failed to fetch players")
 
-      const targetTeam = filterTeamId ? teams.find(t => t.id === filterTeamId) : null
+      const isSpecificTeam = typeof filterTeamId === 'string'
+      const targetTeam = isSpecificTeam ? teams.find(t => t.id === filterTeamId) : null
 
       // --- SHEET 1: PLAYER DATA ---
       const allSheet = workbook.addWorksheet(targetTeam ? `Squad - ${IPL_TEAM_META[targetTeam.team_name]?.short || "TEAM"}` : 'All Sold Players');
@@ -483,7 +483,7 @@ export default function LiveDashboard() {
       allSheet.addRows(allDataRows);
 
       // --- SHEET 2: SUMMARY/STATS ---
-      if (!filterTeamId) {
+      if (!isSpecificTeam) {
         const statsSheet = workbook.addWorksheet('Summary & Statistics');
         statsSheet.columns = [
           { header: 'Team', key: 'team', width: 25 },
