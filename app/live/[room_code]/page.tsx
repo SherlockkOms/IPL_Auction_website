@@ -122,17 +122,17 @@ const CHAT_MESSAGES = [
 const UNSOLD_PLAYERS = [
   { id: 1, name: "Shubman Gill", role: "Batter", basePrice: "2 CR", nationality: "IND" },
   { id: 2, name: "Rashid Khan", role: "Bowler", basePrice: "2 CR", nationality: "AFG" },
-  { id: 3, name: "Jos Buttler", role: "WK-Batter", basePrice: "2 CR", nationality: "ENG" },
+  { id: 3, name: "Jos Buttler", role: "Wicketkeeper", basePrice: "2 CR", nationality: "ENG" },
   { id: 4, name: "Jasprit Bumrah", role: "Bowler", basePrice: "2 CR", nationality: "IND" },
-  { id: 5, name: "Cameron Green", role: "All-rounder", basePrice: "1.5 CR", nationality: "AUS" },
+  { id: 5, name: "Cameron Green", role: "Allrounder", basePrice: "1.5 CR", nationality: "AUS" },
   { id: 6, name: "Suryakumar Yadav", role: "Batter", basePrice: "1.5 CR", nationality: "IND" },
-  { id: 7, name: "Marcus Stoinis", role: "All-rounder", basePrice: "1 CR", nationality: "AUS" },
+  { id: 7, name: "Marcus Stoinis", role: "Allrounder", basePrice: "1 CR", nationality: "AUS" },
   { id: 8, name: "Yuzvendra Chahal", role: "Bowler", basePrice: "1 CR", nationality: "IND" },
-  { id: 9, name: "Quinton de Kock", role: "WK-Batter", basePrice: "1.5 CR", nationality: "SA" },
+  { id: 9, name: "Quinton de Kock", role: "Wicketkeeper", basePrice: "1.5 CR", nationality: "SA" },
   { id: 10, name: "Pat Cummins", role: "Bowler", basePrice: "2 CR", nationality: "AUS" },
-  { id: 11, name: "Hardik Pandya", role: "All-rounder", basePrice: "1.5 CR", nationality: "IND" },
-  { id: 12, name: "Glenn Maxwell", role: "All-rounder", basePrice: "1.5 CR", nationality: "AUS" },
-  { id: 13, name: "Rishabh Pant", role: "WK-Batter", basePrice: "2 CR", nationality: "IND" },
+  { id: 11, name: "Hardik Pandya", role: "Allrounder", basePrice: "1.5 CR", nationality: "IND" },
+  { id: 12, name: "Glenn Maxwell", role: "Allrounder", basePrice: "1.5 CR", nationality: "AUS" },
+  { id: 13, name: "Rishabh Pant", role: "Wicketkeeper", basePrice: "2 CR", nationality: "IND" },
   { id: 14, name: "Trent Boult", role: "Bowler", basePrice: "1 CR", nationality: "NZ" },
   { id: 15, name: "David Warner", role: "Batter", basePrice: "1.5 CR", nationality: "AUS" },
 ]
@@ -492,8 +492,8 @@ export default function LiveDashboard() {
           { header: 'Budget Left (CR)', key: 'budget', width: 15 },
           { header: 'Batters', key: 'batters', width: 10 },
           { header: 'Bowlers', key: 'bowlers', width: 10 },
-          { header: 'All-rounders', key: 'ar', width: 10 },
-          { header: 'WKs', key: 'wk', width: 10 },
+          { header: 'Allrounders', key: 'ar', width: 10 },
+          { header: 'Wicketkeepers', key: 'wk', width: 15 },
           { header: 'Overseas', key: 'overseas', width: 10 },
           { header: 'Captain', key: 'captain', width: 20 },
         ];
@@ -513,13 +513,12 @@ export default function LiveDashboard() {
             budget: team.purse_remaining,
             batters: teamPlayers.filter(p => p.role === 'Batter').length,
             bowlers: teamPlayers.filter(p => p.role === 'Bowler').length,
-            ar: teamPlayers.filter(p => p.role === 'All-rounder').length,
-            wk: teamPlayers.filter(p => p.role === 'WK-Batter').length,
+            ar: teamPlayers.filter(p => p.role === 'Allrounder').length,
+            wk: teamPlayers.filter(p => p.role === 'Wicketkeeper').length,
             overseas: teamPlayers.filter(p => p.nationality !== 'IND').length,
             captain: captain ? captain.name : "Not Assigned"
-          }
-        });
-        statsSheet.addRows(teamStats);
+            }
+            });        statsSheet.addRows(teamStats);
       }
 
       // 4. Download XLSX
@@ -694,7 +693,7 @@ export default function LiveDashboard() {
                                 const squad = players.filter(p => p.winning_team_id === selectedTeamData.id && p.status === "Sold")
                                 const batters = squad.filter(p => p.role === "Batter").length
                                 const bowlers = squad.filter(p => p.role === "Bowler").length
-                                const keepers = squad.filter(p => p.role === "WK-Batter").length
+                                const keepers = squad.filter(p => p.role === "Wicketkeeper").length
                                 return (
                                   <>
                                     <div className="p-2 rounded-lg border bg-secondary/30 border-border/50 flex flex-col gap-0.5">
@@ -727,7 +726,7 @@ export default function LiveDashboard() {
                       </div>
                       <ScrollArea className="flex-1 h-full">
                         <div className="p-6 space-y-6">
-                          {["Batter", "Bowler", "All-rounder", "WK-Batter"].map(role => {
+                          {["Batter", "Bowler", "Allrounder", "Wicketkeeper"].map(role => {
                             const rolePlayers = players.filter(p => 
                               p.winning_team_id === selectedSquadTeamId && 
                               p.status === "Sold" && 
@@ -738,7 +737,7 @@ export default function LiveDashboard() {
                               <div key={role} className="space-y-3">
                                 <h3 className="text-sm font-bold flex items-center gap-2 text-primary">
                                   <div className="w-1 h-4 bg-primary rounded-full" />
-                                  {role === "WK-Batter" ? "Wicket Keepers" : `${role}s`}
+                                  {role === "Wicketkeeper" ? "Wicketkeepers" : role === "Allrounder" ? "Allrounders" : `${role}s`}
                                   <Badge variant="secondary" className="ml-auto text-[10px]">{rolePlayers.length}</Badge>
                                 </h3>
                                 <div className="grid gap-2">
@@ -802,8 +801,8 @@ export default function LiveDashboard() {
                             <TabsTrigger value="All" className="text-xs">All</TabsTrigger>
                             <TabsTrigger value="Batter" className="text-xs">BAT</TabsTrigger>
                             <TabsTrigger value="Bowler" className="text-xs">BOWL</TabsTrigger>
-                            <TabsTrigger value="All-rounder" className="text-xs text-nowrap">A-R</TabsTrigger>
-                            <TabsTrigger value="WK-Batter" className="text-xs">WK</TabsTrigger>
+                            <TabsTrigger value="Allrounder" className="text-xs text-nowrap">A-R</TabsTrigger>
+                            <TabsTrigger value="Wicketkeeper" className="text-xs">WK</TabsTrigger>
                           </TabsList>
                         </Tabs>
                         <div className="mt-3 flex items-center justify-between text-xs text-muted-foreground">
@@ -939,15 +938,15 @@ export default function LiveDashboard() {
                         />
                       </div>
 
-                      <Tabs value={activeCategory} onValueChange={setActiveCategory} className="w-full">
-                        <TabsList className="grid w-full grid-cols-5 bg-secondary/50 h-10 p-1">
-                          <TabsTrigger value="All" className="text-xs">All</TabsTrigger>
-                          <TabsTrigger value="Batter" className="text-xs">BAT</TabsTrigger>
-                          <TabsTrigger value="Bowler" className="text-xs">BOWL</TabsTrigger>
-                          <TabsTrigger value="All-rounder" className="text-xs">AR</TabsTrigger>
-                          <TabsTrigger value="WK-Batter" className="text-xs">WK</TabsTrigger>
-                        </TabsList>
-                      </Tabs>
+                        <Tabs value={activeCategory} onValueChange={setActiveCategory} className="w-full">
+                          <TabsList className="grid w-full grid-cols-5 bg-secondary/50 h-10 p-1">
+                            <TabsTrigger value="All" className="text-xs">All</TabsTrigger>
+                            <TabsTrigger value="Batter" className="text-xs">BAT</TabsTrigger>
+                            <TabsTrigger value="Bowler" className="text-xs">BOWL</TabsTrigger>
+                            <TabsTrigger value="Allrounder" className="text-xs">AR</TabsTrigger>
+                            <TabsTrigger value="Wicketkeeper" className="text-xs">WK</TabsTrigger>
+                          </TabsList>
+                        </Tabs>
                     </div>
 
                     {/* Unsold Players Table */}

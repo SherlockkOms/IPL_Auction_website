@@ -457,7 +457,10 @@ export default function Gateway() {
                   <p className={`text-sm font-medium transition-colors ${isDragging ? "text-primary" : "text-foreground"}`}>
                     (Optional) Upload Player Database (CSV)
                   </p>
-                  <p className="text-xs text-muted-foreground mt-2 text-center px-4">
+                  <p className="text-[10px] text-muted-foreground mt-1 text-center px-4">
+                    Expected columns: <span className="text-primary/80 font-mono">Name, Nationality, Role (Batter/Bowler/Allrounder/Wicketkeeper), Team, Base Price</span>
+                  </p>
+                  <p className="text-[10px] text-muted-foreground mt-1 text-center px-4 italic">
                     Leave blank to use the default 2026 IPL roster
                   </p>
                 </label>

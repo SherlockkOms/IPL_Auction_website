@@ -70,15 +70,34 @@ export async function createAuction(formData: FormData) {
       dynamicTyping: true
     })
 
-    playersToInsert = (parsedData.data as any[]).map(row => ({
-      auction_id: auction.id,
-      name: row.Name,
-      nationality: row.Nationality,
-      role: row.Role,
-      team: row.Team,
-      base_price: parseFloat(row["Base Price"]) || 0,
-      status: "Unsold"
-    }))
+    playersToInsert = (parsedData.data as any[]).map(row => {
+      // Case-insensitive header matching
+      const getVal = (possibleKeys: string[]) => {
+        const key = Object.keys(row).find(k => 
+          possibleKeys.some(pk => pk.toLowerCase() === k.toLowerCase().trim())
+        )
+        return key ? row[key] : null
+      }
+
+      // Role normalization
+      let rawRole = getVal(["Role", "Position", "Type"]) || "Other"
+      let normalizedRole = rawRole
+      if (rawRole.toLowerCase().includes("all-rounder") || rawRole.toLowerCase().includes("allrounder") || rawRole.toLowerCase().includes("ar")) {
+        normalizedRole = "Allrounder"
+      } else if (rawRole.toLowerCase().includes("wicket") || rawRole.toLowerCase().includes("wk")) {
+        normalizedRole = "Wicketkeeper"
+      }
+
+      return {
+        auction_id: auction.id,
+        name: getVal(["Name", "Player", "Player Name"]),
+        nationality: getVal(["Nationality", "Country", "Nation"]),
+        role: normalizedRole,
+        team: getVal(["Team", "Original Team", "Current Team"]),
+        base_price: parseFloat(getVal(["Base Price", "Price", "Base"])) || 0,
+        status: "Pending"
+      }
+    }).filter(p => p.name) // Ensure we don't insert empty rows
   } else {
     // Use Defaults
     playersToInsert = defaultPlayers.map(p => ({
@@ -88,7 +107,7 @@ export async function createAuction(formData: FormData) {
       role: p.role,
       team: p.team,
       base_price: p.base_price,
-      status: "Unsold"
+      status: "Pending"
     }))
   }
 
